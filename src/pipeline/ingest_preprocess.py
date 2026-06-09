@@ -156,12 +156,11 @@ def load_and_merge(
     path_main: str,
     path_nearby: str,
     path_pre: str,
-    path_poi: str,
     build_grid: bool = True,
     verbose: bool = True,
 ) -> pd.DataFrame:
     """
-    Load 4 CSV, merge và handle missing value int 1 DataFrame .
+    Load 3 CSV, merge và handle missing value int 1 DataFrame .
 
     Parameters
     ----------
