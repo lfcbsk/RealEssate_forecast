@@ -8,7 +8,7 @@ from src.pipeline.features import (
     create_training_features, get_valid_features,
     apply_zero_sector_rule, build_zero_sector_mask,
 )
-from pathlib import Path
+from models.retrain import *
 from src.pipeline.ingest_preprocess import run as ingest_run
 import mlflow
 import mlflow.catboost
@@ -294,42 +294,7 @@ def tune_model(model_name, df_all, zero_sectors, n_trials=N_TRIALS, n_splits=N_S
     return study.best_params, study
 
 
-def retrain_model(
-    df,
-    cat_params,
-    model_name="MODEL"
-):
-    print("\n" + "=" * 60)
-    print(f"RETRAIN {model_name}")
-    print("=" * 60)
 
-    sector_stats = compute_sector_stats(
-        df,
-        TARGET_LOG
-    )
-
-    sector_profile = build_sector_profile(
-        df
-    )
-
-    featured = create_training_features(
-        df,
-        target_col=TARGET_LOG,
-        sector_stats=sector_stats,
-        sector_profile=sector_profile,
-        keep_nan=False
-    )
-
-    feats = get_valid_features(featured)
-
-    X = featured[feats].fillna(0)
-    y = featured[TARGET_LOG]
-
-    model = build_catboost(cat_params)
-
-    model.fit(X, y)
-
-    return model
 def run_pipeline(df_train=None, tune=True, n_trials=N_TRIALS):
     """
     Full pipeline:
@@ -394,11 +359,13 @@ def run_pipeline(df_train=None, tune=True, n_trials=N_TRIALS):
         print("STEP 4: Retrain Final Model")
         print("="*60)
 
-        final_model = retrain_model(
+        test_artifacts = retrain_model(
             df_train,
             cat_best_params,
             model_name="TEST MODEL"
         )
+
+        final_model = test_artifacts["model"]
 
         print("\n" + "="*60)
         print("STEP 5: Holdout Evaluation")
@@ -427,24 +394,24 @@ def run_pipeline(df_train=None, tune=True, n_trials=N_TRIALS):
             .reset_index(drop=True)
         )
 
-        production_model = retrain_model(
+        production_artifacts = retrain_model(
             full_df,
             cat_best_params,
             model_name="PRODUCTION MODEL"
         )
+
+        production_model = production_artifacts["model"]
         mlflow.catboost.log_model(
                 production_model,
                 artifact_path="catboost_production_model"
             )
-
-    mlflow.end_run()
-
-    Path("save_model").mkdir(parents=True,exist_ok=True)
-
-    production_model.save_model(
-        "save_model/model.onnx",
-        format="onnx"
-    )
+        save_onnx_model(production_model)
+        save_artifacts(production_model)
+        with open("artifacts/zero_sectors.pkl", "wb") as f:
+            pickle.dump(
+                zero_sectors,
+                f
+            )
 
     print("✓ ONNX model saved: artifacts/model.onnx")
     return {
