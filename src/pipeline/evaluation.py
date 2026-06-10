@@ -92,14 +92,16 @@ def evaluate_holdout(model, train_df, test_df, zero_sectors):
     sector_stats   = compute_sector_stats(train_df, TARGET_LOG)
     sector_profile = build_sector_profile(train_df)
 
-    # Tạo features trực tiếp từ test_df, KHÔNG mask hay concat
+
+    combined = pd.concat([train_df, test_df]).sort_values(["sector","date"])
     featured = create_training_features(
-        test_df,
+        combined,
         target_col=TARGET_LOG,
         sector_stats=sector_stats,
         sector_profile=sector_profile,
         keep_nan=False
     )
+    featured = featured_all[featured_all["date"].isin(test_dates)]
 
     test_feat      = featured.sort_values(["sector", "date"]).reset_index(drop=True)
     test_df_sorted = test_df.sort_values(["sector", "date"]).reset_index(drop=True)

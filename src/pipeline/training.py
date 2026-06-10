@@ -310,50 +310,42 @@ def run_pipeline(df_train, tune=True, n_trials=N_TRIALS):
             "random_seed": RANDOM_SEED,
             "tune":        tune,
         })
-    # ── 1. Zero-sector rule ────────────────────────────────────
-    print("\n" + "="*60)
-    print("STEP 1: Zero-Sector Rule")
-    print("="*60)
-    zero_sectors, sector_meta = build_zero_sector_mask(df_train)
-    mlflow.log_param("n_zero_sectors", len(zero_sectors))
-    # ── 2. Optuna tuning ───────────────────────────────────────
-    if tune:
+        # ── 1. Zero-sector rule ────────────────────────────────────
         print("\n" + "="*60)
-        print("STEP 2: Optuna Tuning")
+        print("STEP 1: Zero-Sector Rule")
         print("="*60)
-        cat_best_params,  study  = tune_model("catboost", df_train, zero_sectors, n_trials)
-        mlflow.log_params({f"best_{k}": v for k, v in cat_best_params.items()})
-        mlflow.log_metric("optuna_best_score", study.best_value)
-    else: 
-        cat_best_params  = {}
+        zero_sectors, sector_meta = build_zero_sector_mask(df_train)
+        mlflow.log_param("n_zero_sectors", len(zero_sectors))
+        # ── 2. Optuna tuning ───────────────────────────────────────
+        if tune:
+            print("\n" + "="*60)
+            print("STEP 2: Optuna Tuning")
+            print("="*60)
+            cat_best_params,  study  = tune_model("catboost", df_train, zero_sectors, n_trials)
+            mlflow.log_params({f"best_{k}": v for k, v in cat_best_params.items()})
+            mlflow.log_metric("optuna_best_score", study.best_value)
+        else: 
+            cat_best_params  = {}
 
-    # ── 3. Full CV with tuned models ───────────────────────────
-    print("\n" + "="*60)
-    print("STEP 3: Full TimeSeriesSplit CV (5-fold)")
-    print("="*60)
+        # ── 3. Full CV with tuned models ───────────────────────────
+        print("\n" + "="*60)
+        print("STEP 3: Full TimeSeriesSplit CV (5-fold)")
+        print("="*60)
 
-    cat_model  = build_catboost(cat_best_params)
+        cat_model  = build_catboost(cat_best_params)
 
-    print("CatBoost:")
-    cat_scores, cat_oof = timeseries_cv(df_train, cat_model, zero_sectors=zero_sectors, mlflow_run=parent_run)
-    mlflow.catboost.log_model(cat_model, artifact_path="catboost_model")
+        print("CatBoost:")
+        cat_scores, cat_oof = timeseries_cv(df_train, cat_model, zero_sectors=zero_sectors, mlflow_run=parent_run)
+        mlflow.catboost.log_model(cat_model, artifact_path="catboost_model")
 
-    # ── Summary ────────────────────────────────────────────────
-    cat_mean = np.mean(cat_scores)
-    cat_std  = np.std(cat_scores)
+        # ── Summary ────────────────────────────────────────────────
+        cat_mean = np.mean(cat_scores)
+        cat_std  = np.std(cat_scores)
 
-    mlflow.log_metrics({
-        "final_cat_score_mean": cat_mean,
-        "final_cat_score_std":  cat_std,
-    })
-    cat_mean = np.mean(cat_scores)
-    cat_std  = np.std(cat_scores)
-
-    mlflow.log_metrics({
-        "final_cat_score_mean": cat_mean,
-        "final_cat_score_std":  cat_std,
-    })
-
+        mlflow.log_metrics({
+            "final_cat_score_mean": cat_mean,
+            "final_cat_score_std":  cat_std,
+        })
 
     return {
         "best_model": "catboost",

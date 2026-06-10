@@ -183,6 +183,7 @@ def load_and_merge(
     nearby_df = _normalise_sector(nearby_df)
     pre_df    = _normalise_sector(pre_df)
 
+    df = main_df.copy()
     df = df.merge(nearby_df,      on=["month", "sector"], how="left")
     df = df.merge(pre_df,         on=["month", "sector"], how="left")
 

@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 from dateutil.relativedelta import relativedelta
-from features import (
+from src.pipeline.features import (
     create_training_features,
     get_valid_features,
     compute_sector_stats,
@@ -80,7 +80,8 @@ def recursive_forecast(
         # Fill predictions back into month_rows and append to history
         month_rows = month_rows.reset_index(drop=True)
         month_rows[target_col] = preds
-
+        if TARGET in month_rows.columns:
+            month_rows[TARGET] = np.expm1(preds) 
         history = pd.concat([history, month_rows], ignore_index=True)
 
         all_preds.append(
@@ -138,6 +139,7 @@ def build_forecast_grid(df_train, n_months=12):
         grid = grid.merge(last_known, on="sector", how="left")
 
     grid[TARGET_LOG] = np.nan
+    grid[TARGET]     = np.nan
     return grid
 
 def forecast_next_year(df, model, results, n_months=12):
@@ -152,6 +154,7 @@ def forecast_next_year(df, model, results, n_months=12):
     n_months  : int — số tháng dự báo (default 12)
  
     """
+    
     zero_sectors   = results["zero_sectors"]
     sector_stats   = compute_sector_stats(df, TARGET_LOG)
     sector_profile = build_sector_profile(df)
