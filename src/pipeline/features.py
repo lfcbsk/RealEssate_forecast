@@ -14,14 +14,26 @@ TARGET_LOG = (
     else TARGET
 )
 
-DROP_COLS = ['num_new_house_transactions','area_new_house_transactions', 'price_new_house_transactions',
-    'amount_new_house_transactions', 'area_per_unit_new_house_transactions','total_price_per_unit_new_house_transactions',
-    'num_new_house_available_for_sale', 'area_new_house_available_for_sale','period_new_house_sell_through',
-    'num_new_house_transactions_nearby_sectors','area_new_house_transactions_nearby_sectors',
-    'price_new_house_transactions_nearby_sectors','amount_new_house_transactions_nearby_sectors',
-    'area_per_unit_new_house_transactions_nearby_sectors','total_price_per_unit_new_house_transactions_nearby_sectors',
-    'num_new_house_available_for_sale_nearby_sectors','area_new_house_available_for_sale_nearby_sectors',
-    'period_new_house_sell_through_nearby_sectors']
+DROP_COLS = ['num_new_house_transactions',
+       'area_new_house_transactions', 'price_new_house_transactions',
+       'amount_new_house_transactions', 'area_per_unit_new_house_transactions',
+       'total_price_per_unit_new_house_transactions',
+       'num_new_house_available_for_sale', 'area_new_house_available_for_sale',
+       'period_new_house_sell_through', 'transportation_station_dense',
+       'education_dense', 'medical_health_dense',
+       'num_new_house_transactions_nearby_sectors',
+       'area_new_house_transactions_nearby_sectors',
+       'price_new_house_transactions_nearby_sectors',
+       'amount_new_house_transactions_nearby_sectors',
+       'area_per_unit_new_house_transactions_nearby_sectors',
+       'total_price_per_unit_new_house_transactions_nearby_sectors',
+       'num_new_house_available_for_sale_nearby_sectors',
+       'area_new_house_available_for_sale_nearby_sectors',
+       'period_new_house_sell_through_nearby_sectors',
+       'area_pre_owned_house_transactions',
+       'amount_pre_owned_house_transactions',
+       'num_pre_owned_house_transactions',
+       'price_pre_owned_house_transactions']
 
 FEATURES = [
     "downtrend_signal","month","quarter","year","month_sin","month_cos","regime",
@@ -31,7 +43,8 @@ FEATURES = [
     "trend_strength","zero_rate_6","zero_rate_12","yoy_diff","yoy_ratio",
     "rolling_max_12","rolling_min_12","spike_ratio","volatility_ratio",
     "regime_trend","regime_month_sin", "regime_month_cos","sector_type", "nearby_supply_lag1",
-    "nearby_sellthrough_lag1", "sector_mean_train","sector_std_train","sector_zero_rate_train","sector_cv_train"]
+    "nearby_sellthrough_lag1", "sector_mean_train","sector_std_train","sector_zero_rate_train","sector_cv_train", "sellthrough_lag1",
+    "nearby_price_lag1","preowned_area_lag1"]
 
 def assign_regime(month):
     if month < pd.Timestamp("2020-01-01"):
@@ -131,7 +144,7 @@ def compute_sector_stats(df_train_fold, target_col):
 def create_training_features(
     df_in,
     target_col,
-    sector_stats=None,sector_profile=None,
+    sector_stats=None, sector_profile=None,
     LAG_LIST=[1,2,3,6,12],
     rolling_windows=[3,6,12],
     keep_nan=True,
@@ -139,6 +152,7 @@ def create_training_features(
 
     df = df_in.copy()
     df = (df.sort_values(["sector","date"]).reset_index(drop=True))
+
     if not np.issubdtype(df["date"].dtype, np.datetime64):
         df["date"] = pd.to_datetime(df["date"])
 
@@ -146,19 +160,25 @@ def create_training_features(
     df["month"] = df["date"].dt.month
     df["quarter"] = df["date"].dt.quarter
     df["year"] = df["date"].dt.year
+
     df["month_sin"] = np.sin(2 * np.pi * df["month"] / 12)
     df["month_cos"] = np.cos(2 * np.pi * df["month"] / 12)
 
     # Regime
     if "regime" not in df.columns:
         df["regime"] = (df["date"].apply(assign_regime))
+
     # Trend
     df["trend"] = (df.groupby("sector").cumcount())
+
     df["trend_months"] = ((df["date"]- df.groupby("sector")["date"].transform("min")).dt.days / 30.0)
+
     # Lags
     for lag in LAG_LIST:
         df[f"lag_{lag}"] = (df.groupby("sector")[target_col].shift(lag))
-    shifted_target = (df.groupby("sector")[target_col].shift(1)) 
+
+    shifted_target = (df.groupby("sector")[target_col].shift(1))
+
     lag13 = (df.groupby("sector")[target_col].shift(13))
 
     # Momentum
@@ -216,21 +236,49 @@ def create_training_features(
 
     # Train-fold sector stats
     if sector_stats is not None:
-        for stat in ["mean", "std", "zero_rate", "cv"]:
-            df[f"sector_{stat}_train"] = (df["sector"].map(sector_stats[stat]))
+        df["sector_mean_train"] = (df["sector"].map(sector_stats["mean"]))
+        df["sector_std_train"] = (df["sector"].map(sector_stats["std"]))
+        df["sector_zero_rate_train"] = (df["sector"].map(sector_stats["zero_rate"]))
+        df["sector_cv_train"] = (df["sector"].map(sector_stats["cv"]))
 
     # exogenous features
     df["nearby_supply_lag1"] = (df.groupby("sector")["num_new_house_available_for_sale_nearby_sectors"].shift(1))
     df["nearby_sellthrough_lag1"] = (df.groupby("sector")["period_new_house_sell_through_nearby_sectors"].shift(1))
 
+    g = df.groupby("sector")
+    df["sellthrough_lag1"] = (g["period_new_house_sell_through"].shift(1))
+    df["nearby_price_lag1"] = (g["price_new_house_transactions_nearby_sectors"].shift(1))
+    df["preowned_area_lag1"] = (g["area_pre_owned_house_transactions"].shift(1))
+
     # Fill NA
     if not keep_nan:
-        feature_cols = [c for c in df.columns if c != target_col]
-        df[feature_cols] = (df.groupby("sector")[feature_cols].ffill())
 
+        feature_cols = [
+            c
+            for c in df.columns
+            if c != target_col
+        ]
+
+        df[feature_cols] = (
+            df.groupby("sector")[feature_cols]
+            .ffill()
+        )
+
+    # ==================================================
     # Drop raw columns
-    drop_cols = [c for c in DROP_COLS if c in df.columns]
-    df.drop(columns=drop_cols,inplace=True)
+    # ==================================================
+
+    drop_cols = [
+        c
+        for c in DROP_COLS
+        if c in df.columns
+    ]
+
+    df.drop(
+        columns=drop_cols,
+        inplace=True
+    )
+
     return df
 
 def get_valid_features(df):

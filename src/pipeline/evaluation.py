@@ -101,8 +101,8 @@ def evaluate_holdout(model, train_df, test_df, zero_sectors):
         sector_profile=sector_profile,
         keep_nan=False
     )
-    featured = featured_all[featured_all["date"].isin(test_dates)]
-
+    featured = featured[featured["date"].isin(test_df["date"].unique())].copy()
+    
     test_feat      = featured.sort_values(["sector", "date"]).reset_index(drop=True)
     test_df_sorted = test_df.sort_values(["sector", "date"]).reset_index(drop=True)
 

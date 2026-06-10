@@ -8,9 +8,11 @@ from src.pipeline.features import (
     create_training_features, get_valid_features,
     apply_zero_sector_rule, build_zero_sector_mask,
 )
+
+from src.pipeline.ingest_preprocess import run as ingest_run
 import mlflow
 import mlflow.catboost
-from src.pipeline.evaluation import competition_score, evaluate_regression
+from src.pipeline.evaluation import competition_score, evaluate_regression, evaluate_holdout
 from src.utils.config import load_config
 
 
@@ -292,15 +294,58 @@ def tune_model(model_name, df_all, zero_sectors, n_trials=N_TRIALS, n_splits=N_S
     return study.best_params, study
 
 
+def retrain_model(
+    df,
+    cat_params,
+    model_name="MODEL"
+):
+    print("\n" + "=" * 60)
+    print(f"RETRAIN {model_name}")
+    print("=" * 60)
 
-def run_pipeline(df_train, tune=True, n_trials=N_TRIALS):
+    sector_stats = compute_sector_stats(
+        df,
+        TARGET_LOG
+    )
+
+    sector_profile = build_sector_profile(
+        df
+    )
+
+    featured = create_training_features(
+        df,
+        target_col=TARGET_LOG,
+        sector_stats=sector_stats,
+        sector_profile=sector_profile,
+        keep_nan=False
+    )
+
+    feats = get_valid_features(featured)
+
+    X = featured[feats].fillna(0)
+    y = featured[TARGET_LOG]
+
+    model = build_catboost(cat_params)
+
+    model.fit(X, y)
+
+    return model
+def run_pipeline(df_train=None, tune=True, n_trials=N_TRIALS):
     """
     Full pipeline:
-    1. Zero-sector rule
-    2. Optuna tuning (CatBoost + LightGBM) 
-    3. Final CV for each model + ensemble
-    4. Ensemble weight optimisation on OOF preds
+    1. Ingest & Preprocess (nếu df_train=None)
+    2. Zero-sector rule
+    3. Optuna tuning (CatBoost + LightGBM) 
+    4. Final CV for each model + ensemble
+    5. Ensemble weight optimisation on OOF preds
     """
+    # ── 0. Load data nếu chưa có ───────────────────────────────────────────
+    if df_train is None:
+        print("\n" + "="*80)
+        print("STEP 0: Ingest & Preprocess")
+        print("="*80)
+        df_train, test_df = ingest_run(test_ratio=0.2, save_outputs=False)
+    
     mlflow.set_experiment(MLFLOW_EXPERIMENT)
 
     with mlflow.start_run(run_name="pipeline_run") as parent_run:
@@ -336,8 +381,6 @@ def run_pipeline(df_train, tune=True, n_trials=N_TRIALS):
 
         print("CatBoost:")
         cat_scores, cat_oof = timeseries_cv(df_train, cat_model, zero_sectors=zero_sectors, mlflow_run=parent_run)
-        mlflow.catboost.log_model(cat_model, artifact_path="catboost_model")
-
         # ── Summary ────────────────────────────────────────────────
         cat_mean = np.mean(cat_scores)
         cat_std  = np.std(cat_scores)
@@ -347,8 +390,57 @@ def run_pipeline(df_train, tune=True, n_trials=N_TRIALS):
             "final_cat_score_std":  cat_std,
         })
 
+        print("\n" + "="*60)
+        print("STEP 4: Retrain Final Model")
+        print("="*60)
+
+        final_model = retrain_model(
+            df_train,
+            cat_best_params,
+            model_name="TEST MODEL"
+        )
+
+        print("\n" + "="*60)
+        print("STEP 5: Holdout Evaluation")
+        print("="*60)
+
+        test_results = evaluate_holdout(
+            model=final_model,
+            train_df=df_train,
+            test_df=test_df,
+            zero_sectors=zero_sectors
+        )
+        mlflow.log_metrics({
+                "test_competition_score": test_results["competition_score"],
+                "test_mae": test_results["mae"],
+                "test_rmse": test_results["rmse"],
+                "test_r2": test_results["r2"],
+                "test_mape": test_results["mape"],
+            })
+        print("\n" + "="*60)
+        print("STEP 6: Train Production Model")
+        print("="*60)
+
+        full_df = (
+            pd.concat([df_train, test_df])
+            .sort_values(["sector", "date"])
+            .reset_index(drop=True)
+        )
+
+        production_model = retrain_model(
+            full_df,
+            cat_best_params,
+            model_name="PRODUCTION MODEL"
+        )
+        mlflow.catboost.log_model(
+                production_model,
+                artifact_path="catboost_production_model"
+            )
+
     return {
         "best_model": "catboost",
+        "final_model": production_model,
+        'test_results': test_results,
         "zero_sectors": zero_sectors,
         "sector_meta": sector_meta,
         "cat_params": cat_best_params,
@@ -356,3 +448,4 @@ def run_pipeline(df_train, tune=True, n_trials=N_TRIALS):
         "cat_oof": cat_oof,
         "mlflow_run_id": parent_run.info.run_id
     }
+

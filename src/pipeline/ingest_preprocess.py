@@ -238,3 +238,89 @@ def split_train_test(
     return train_df, test_df
 
 
+def run(
+    path_main: str = None,
+    path_nearby: str = None,
+    path_pre: str = None,
+    test_ratio: float = 0.2,
+    save_outputs: bool = False,
+    output_dir: str = "data/processed/",
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Full pipeline: Load → Merge → Handle Missing → Sort → Split Train/Test
+    
+    Parameters
+    ----------
+    path_main : path to new_house_transactions.csv
+        If None, will use config["data"]["train_dir"]
+    path_nearby : path to new_house_transactions_nearby.csv
+    path_pre : path to pre_owned_house_transactions.csv
+    test_ratio : ratio for test split (default 0.2)
+    save_outputs : if True, save train/test to CSV
+    output_dir : directory to save outputs
+    
+    Returns
+    -------
+    train_df, test_df : Tuple[pd.DataFrame, pd.DataFrame]
+    """
+    print("\n" + "="*80)
+    print("PIPELINE: INGEST & PREPROCESS")
+    print("="*80)
+    
+    # ── 1. Set default paths if not provided ────────────────────────────────
+    if path_main is None:
+        train_dir = cfg["data"]["train_dir"]
+        path_main   = f"{train_dir}/new_house_transactions.csv"
+        path_nearby = f"{train_dir}/new_house_transactions_nearby_sectors.csv"
+        path_pre    = f"{train_dir}/pre_owned_house_transactions.csv"
+    
+    # ── 2. Load & Merge ───────────────────────────────────────────────────
+    print("\n[STEP 1] Load & Merge 3 CSV files")
+    print("-" * 80)
+    df = load_and_merge(
+        path_main=path_main,
+        path_nearby=path_nearby,
+        path_pre=path_pre,
+        build_grid=True,
+        verbose=True,
+    )
+    
+    # ── 3. Sort Data ──────────────────────────────────────────────────────
+    print("\n[STEP 2] Sort Data")
+    print("-" * 80)
+    df = sort_data(df)
+    print(f"✓ Data sorted by [date, sector]")
+    
+    # ── 4. Split Train/Test ───────────────────────────────────────────────
+    print("\n[STEP 3] Split Train/Test")
+    print("-" * 80)
+    train_df, test_df = split_train_test(df, test_ratio=test_ratio)
+    
+    # ── 5. Save Outputs (Optional) ────────────────────────────────────────
+    if save_outputs:
+        import os
+        os.makedirs(output_dir, exist_ok=True)
+        
+        train_path = f"{output_dir}/train.csv"
+        test_path  = f"{output_dir}/test.csv"
+        
+        train_df.to_csv(train_path, index=False)
+        test_df.to_csv(test_path, index=False)
+        
+        print(f"\n[STEP 4] Save Outputs")
+        print("-" * 80)
+        print(f"Train saved: {train_path}")
+        print(f"Test saved : {test_path}")
+    
+    print("\n" + "="*80)
+    print(f"PIPELINE COMPLETE")
+    print(f"  Train: {train_df.shape} | Test: {test_df.shape}")
+    print("="*80 + "\n")
+    
+    return train_df, test_df
+
+
+if __name__ == "__main__":
+    train_df, test_df = run(save_outputs=True)
+
+
