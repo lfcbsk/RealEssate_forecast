@@ -1,88 +1,132 @@
-# RealEssate_forecast
+# RealEstate Forecast API
 
-## Project Structure
+Machine Learning-powered API for forecasting real estate transactions using recursive multi-step prediction strategy.
+
+## 🚀 Features
+
+- **Recursive Forecasting**: Multi-step ahead predictions month-by-month
+- **ONNX Model Inference**: Fast predictions with optimized ONNX runtime
+- **Drift Detection**: Monitor data drift for model reliability
+- **MLflow Integration**: Track model metrics and versions
+- **Swagger Documentation**: Interactive API docs at `/docs`
+- **Docker Ready**: Full containerization support
+
+## 📋 API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/v1/health` | Health check |
+| POST | `/api/v1/forecast` | Generate n-month forecast |
+| POST | `/api/v1/predict` | Single prediction with custom features |
+| POST | `/api/v1/upload` | Batch prediction via file upload |
+| GET | `/api/v1/sectors` | List all sectors with statistics |
+| GET | `/api/v1/metrics` | Model metrics from MLflow |
+| GET | `/api/v1/drift` | Drift detection report |
+
+## 🛠️ Quick Start
+
+### Local Development
+
+```bash
+# Install dependencies
+pip install -r requirements.txt
+
+# Run API server
+python -m src.api.main
+
+# Access Swagger UI
+open http://localhost:8000/docs
+```
+
+### Docker Deployment
+
+```bash
+# Build and run with docker-compose
+cd docker
+docker-compose up --build
+
+# API available at http://localhost:8000
+# Dashboard available at http://localhost:8501
+```
+
+## 📦 Project Structure
 
 ```
-RealEssate_forecast/
-├── README.md                          # Project documentation
-├── .gitignore                         # Git ignore file
-├── Makefile                           # Make commands for development
-├── pyproject.toml                     # Python project configuration
-├── requirement.txt                    # Python dependencies
-├── .github/                           # GitHub configuration
-│   └── workflows/                     # CI/CD workflows
-│       ├── pr-checks.yml              # Pull request checks
-│       ├── ci.yml                     # Continuous Integration
-│       ├── cd.yml                     # Continuous Deployment
-│       └── build-and-push.yml         # Docker build and push
-├── configs/
-│   └── config.yaml                    # Configuration settings
-├── data/
-│   ├── data_source.md                 # Data source documentation
-│   
-├── docker/                            # Docker configuration
+├── src/
+│   ├── api/
+│   │   ├── main.py          # FastAPI application
+│   │   ├── routes.py        # API endpoints
+│   │   └── schemas.py       # Pydantic models
+│   ├── models/
+│   │   └── model_registry.py # ONNX model inference
+│   ├── pipeline/
+│   │   ├── predict.py       # Recursive forecasting
+│   │   └── features.py      # Feature engineering
+│   └── monitoring/
+│       └── detect_drift.py  # Drift detection
+├── docker/
 │   ├── api.Dockerfile
 │   ├── app.Dockerfile
 │   └── docker-compose.yml
-├── k8s/                               # Kubernetes configuration
-│   ├── configmap.yaml
-│   ├── cronjob.yaml
-│   ├── deployment.yaml
-│   ├── service.yaml
-│   └── monitor/                       # Monitoring configuration
-│       ├── grafana-dashboard.json
-│       ├── grafana.yaml
-│       └── prometheus.yaml
-├── notebooks/                         # Jupyter notebooks
-│   ├── eda.ipynb                      # Exploratory Data Analysis
-│   ├── main_nb.ipynb                  # Main analysis notebook
-│   ├── submission.csv
-│   ├── variable_dictionary.md
-├── src/                               # Source code
-│   ├── api/                           # API service
-│   │   ├── main.py
-│   │   ├── routes.py
-│   │   └── schemas.py
-│   ├── app/                           # Streamlit application
-│   │   └── streamlit_app.py
-│   ├── models/                        # Model management
-│   │   ├── model_config.py
-│   │   ├── model_registry.py
-│   │   └── retrain.py
-│   ├── monitoring/                    # Monitoring utilities
-│   │   ├── dectect_drift.py
-│   │   ├── log_report.py
-│   │   └── reference.py
-│   └── pipeline/                      # Data pipeline
-│       ├── evaluation.py
-│       ├── features.py
-│       ├── ingest.py
-│       ├── predict.py
-│       ├── preprocess.py
-│       └── training.py
-└── tests/                             # Test suite
-    ├── conftest.py
-    ├── test_evaluate.py
-    └── test_features.py
+└── requirements.txt
 ```
 
-## Directory Descriptions
+## 🔍 Example Usage
 
-- **.gitignore**: Git configuration to exclude files from version control
-- **Makefile**: Development commands and task automation
-- **pyproject.toml**: Python project metadata and build configuration
-- **requirement.txt**: Python package dependencies
-- **.github/**: GitHub configuration and CI/CD workflows
-  - **workflows/**: Automated workflow files for PR checks, CI, CD, and Docker builds
-- **configs/**: Project configuration files
-- **data/**: Training and test datasets
-- **docker/**: Docker and Docker Compose configuration for containerization
-- **k8s/**: Kubernetes manifests for deployment and monitoring
-- **notebooks/**: Jupyter notebooks for analysis and experimentation
-- **src/**: Main source code organized by module
-  - **api/**: FastAPI application endpoints and schemas
-  - **app/**: Streamlit web application
-  - **models/**: Machine learning model management and retraining
-  - **monitoring/**: Data drift detection and monitoring
-  - **pipeline/**: Data processing and model training pipeline
-- **tests/**: Unit tests for the project
+### Get Forecast
+
+```bash
+curl -X POST "http://localhost:8000/api/v1/forecast" \
+  -H "Content-Type: application/json" \
+  -d '{"n_months": 12}'
+```
+
+### Single Prediction
+
+```bash
+curl -X POST "http://localhost:8000/api/v1/predict" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "features": {
+      "nearby_sectors": 5,
+      "pre_owned": 100,
+      "lag_1": 500,
+      "lag_2": 480
+    }
+  }'
+```
+
+### Upload File for Batch Prediction
+
+```bash
+curl -X POST "http://localhost:8000/api/v1/upload" \
+  -F "file=@predictions.csv"
+```
+
+## 🧪 Testing
+
+```bash
+# Run tests
+pytest tests/ -v
+
+# With coverage
+pytest tests/ --cov=src --cov-report=html
+```
+
+## 📊 Monitoring
+
+- **Model Metrics**: Track RMSE, MAE, R² via `/api/v1/metrics`
+- **Drift Detection**: Monitor data drift via `/api/v1/drift`
+- **Health Checks**: Built-in health endpoint for K8s
+
+## 🚢 Kubernetes Deployment
+
+See `k8s/` directory for Kubernetes manifests including:
+- Deployment
+- Service
+- ConfigMap
+- CronJob for retraining
+
+## 📝 License
+
+MIT License
