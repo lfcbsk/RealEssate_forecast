@@ -4,6 +4,7 @@ import io
 import logging
 from typing import Optional, List
 import pandas as pd
+import mlflow
 from fastapi import APIRouter, UploadFile, File, HTTPException, Query
 from src.api.schemas import (
     HealthResponse,
@@ -20,6 +21,21 @@ from src.api.schemas import (
     DriftReport,
     ErrorResponse,
 )
+from src.pipeline.predict import forecast_next_year
+from src.monitoring.detect_drift import detect_data_drift
+from src.utils.config import load_config
+
+cfg = load_config()
+
+TARGET = cfg["target"]["column"]
+TARGET_TRANSFORM = cfg["target"]["transform"]
+
+TARGET_LOG = (
+    f"log_{TARGET}"
+    if TARGET_TRANSFORM == "log1p"
+    else TARGET
+)
+
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["forecast"])
@@ -235,7 +251,7 @@ async def get_sectors():
         sectors_list = []
         for sector in all_sectors:
             sectors_list.append(SectorInfo(
-                sector_name=sector,
+                sector_name=str(sector),
                 is_zero_sector=sector in zero_sectors,
                 historical_avg=float(sector_stats.get(sector, 0)),
             ))
@@ -318,12 +334,15 @@ async def get_drift_report(reference_period: Optional[str] = Query(None, descrip
             train_data,
             model=registry,
             target_col=TARGET_LOG,
+            feature_cols=registry.features,
         )
+        summary = result["summary"]
+        affected = [col for col, s in summary["feature_drift"].items() if s.get("ks_drift") or s.get("psi_drift")]
 
         return DriftReport(
-            drift_detected=result.get("drift_detected", False),
-            drift_score=float(result.get("drift_score", 0.0)),
-            affected_features=result.get("affected_features", []),
+            drift_detected=result.get("overall_drift_detected", False),
+            drift_score=float(summary.get("feature_drift_ratio", 0.0)),
+            affected_features=affected,
             severity=result.get("severity", "low"),
             recommendation=result.get("recommendation", "Continue monitoring"),
         )

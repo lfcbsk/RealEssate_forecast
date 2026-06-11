@@ -12,16 +12,13 @@ warnings.filterwarnings('ignore')
 
 def calculate_psi(expected: np.ndarray, actual: np.ndarray, buckets: int = 10) -> float:
     """
-    Tính Population Stability Index (PSI).
-    PSI < 0.1: Không có thay đổi đáng kể
-    0.1 <= PSI < 0.2: Thay đổi nhẹ (cần theo dõi)
-    PSI >= 0.2: Thay đổi lớn (cần hành động)
+    Compute Population Stability Index (PSI).
+    PSI < 0.1: No significant change
+    0.1 <= PSI < 0.2: slight change 
+    PSI >= 0.2: Large drift
     """
-    # Tạo bins dựa trên dữ liệu expected (baseline)
     min_val = min(np.min(expected), np.min(actual))
     max_val = max(np.max(expected), np.max(actual))
-    
-    # Thêm epsilon để tránh chia cho 0
     epsilon = 1e-5 
     
     expected_counts, bin_edges = np.histogram(expected, bins=buckets, range=(min_val, max_val))
@@ -36,7 +33,7 @@ def calculate_psi(expected: np.ndarray, actual: np.ndarray, buckets: int = 10) -
 
 def test_feature_drift_stats(ref: pd.Series, curr: pd.Series, alpha: float = 0.05) -> Dict[str, Any]:
     """
-    Chạy đồng thời KS-test, Anderson-Darling và PSI cho một feature.
+    Run KS-test, Anderson-Darling và PSI for a feature.
     """
     ref_clean = ref.dropna().values
     curr_clean = curr.dropna().values
@@ -47,9 +44,10 @@ def test_feature_drift_stats(ref: pd.Series, curr: pd.Series, alpha: float = 0.0
     # 1. Kolmogorov-Smirnov
     ks_stat, ks_pval = ks_2samp(ref_clean, curr_clean)
     
-    # 2. Anderson-Darling (nhạy hơn với phần đuôi phân phối)
+    # 2. Anderson-Darling 
     try:
-        ad_stat, ad_pval, _ = anderson_ksamp([ref_clean, curr_clean])
+        res = anderson_ksamp([ref_clean, curr_clean])
+        ad_stat, ad_pval = res.statistic, res.pvalue
     except Exception:
         ad_stat, ad_pval = np.nan, np.nan
         
@@ -76,7 +74,7 @@ def test_feature_drift_stats(ref: pd.Series, curr: pd.Series, alpha: float = 0.0
 
 def check_data_quality_drift(ref_df: pd.DataFrame, curr_df: pd.DataFrame) -> Dict[str, Any]:
     """
-    Kiểm tra sự suy giảm chất lượng dữ liệu (Missing rate, Schema).
+    Check data quality (Missing rate, Schema).
     """
     issues = []
     
@@ -85,7 +83,9 @@ def check_data_quality_drift(ref_df: pd.DataFrame, curr_df: pd.DataFrame) -> Dic
     curr_missing = curr_df.isnull().mean()
     
     for col in ref_missing.index:
-        if curr_missing[col] > ref_missing[col] + 0.05: # Tăng > 5%
+        if col not in curr_missing.index:
+            continue
+        if curr_missing[col] > ref_missing[col] + 0.05: 
             issues.append(f"Missing rate in '{col}' increased from {ref_missing[col]:.2%} to {curr_missing[col]:.2%}")
             
     # 2. New columns or missing columns
@@ -104,7 +104,7 @@ def check_data_quality_drift(ref_df: pd.DataFrame, curr_df: pd.DataFrame) -> Dic
 
 def detect_distribution_drift(ref_series: pd.Series, curr_series: pd.Series, name: str, alpha: float = 0.05) -> Dict[str, Any]:
     """
-    Wrapper để kiểm tra drift cho Label hoặc Prediction.
+    Wrapper check drift for Label or Prediction.
     """
     stats = test_feature_drift_stats(ref_series, curr_series, alpha)
     psi = stats.get("psi", 0)
@@ -130,8 +130,8 @@ def detect_distribution_drift(ref_series: pd.Series, curr_series: pd.Series, nam
 
 def page_hinkley_test(errors: np.ndarray, delta: float = 0.005, lambda_ph: float = 50.0) -> Dict[str, Any]:
     """
-    Page-Hinkley Test cho dữ liệu chuỗi thời gian (sequential).
-    Phát hiện sự thay đổi dần dần (gradual) hoặc đột ngột (sudden) trong lỗi dự đoán.
+    Page-Hinkley Test for Time series  (sequential).
+    deetect gradual or sudden drift in errors from predictions.
     """
     n = len(errors)
     if n == 0:
@@ -148,7 +148,7 @@ def page_hinkley_test(errors: np.ndarray, delta: float = 0.005, lambda_ph: float
         if m_t > max_m:
             max_m = m_t
             
-    drift_detected = max_m > lambda_ph
+    drift_detected = bool(max_m > lambda_ph)
     
     return {
         "drift_detected": drift_detected,
@@ -164,7 +164,7 @@ def detect_concept_drift_comprehensive(
     mae_threshold: float = 0.2
 ) -> Dict[str, Any]:
     """
-    Kết hợp kiểm tra suy giảm MAE và Page-Hinkley test trên residuals.
+    check concept drift with MAE and Page-Hinkley on residuals.
     """
     try:
         ref_pred = np.asarray(model.predict(ref_X.fillna(0))).reshape(-1)
@@ -179,7 +179,7 @@ def detect_concept_drift_comprehensive(
         curr_abs_errors = np.abs(curr_y - curr_pred)
         ph_result = page_hinkley_test(curr_abs_errors)
         
-        concept_drift_flag = (mae_degradation > mae_threshold) or ph_result["drift_detected"]
+        concept_drift_flag = bool((mae_degradation > mae_threshold) or ph_result["drift_detected"])
         
         return {
             "concept_drift_detected": concept_drift_flag,
@@ -206,7 +206,7 @@ def detect_data_drift(
     mae_threshold: float = 0.2
 ) -> Dict[str, Any]:
     """
-    Hàm chính kiểm tra toàn diện mọi loại drift.
+    call all drift.
     """
     # ---- 1) Split reference / current ----
     df_sorted = df.sort_values("date").reset_index(drop=True) if "date" in df.columns else df.reset_index(drop=True)
@@ -266,13 +266,13 @@ def detect_data_drift(
     
     # Logic quyết định severity
     if concept_flag or drift_ratio > 0.5 or quality_flag:
-        severity = "HIGH"
+        severity = "high"
         recommendation = "URGENT: Retrain model immediately. Check data pipeline for quality issues."
     elif drift_ratio > 0.2 or (label_report and label_report["severity"] == "medium"):
-        severity = "MEDIUM"
+        severity = "medium"
         recommendation = "WARNING: Monitor closely. Prepare retraining pipeline. Investigate drifted features."
     else:
-        severity = "LOW"
+        severity = "low"
         recommendation = "OK: System is stable. Continue routine monitoring."
 
     return {

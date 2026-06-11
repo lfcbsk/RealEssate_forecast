@@ -71,7 +71,7 @@ class UploadResponse(BaseModel):
 
 class SectorInfo(BaseModel):
     """Sector information."""
-    sector_name: str
+    sector_name: str | int
     is_zero_sector: bool
     historical_avg: Optional[float] = None
 
