@@ -66,7 +66,7 @@ def test_forecast_success(mock_get_train_data, mock_get_registry, client, mock_m
     mock_get_train_data.return_value = mock_train_data
     
     # Mock forecast_next_year
-    with patch("src.api.routes.forecast_next_year") as mock_forecast:
+    with patch("src.pipeline.predict.forecast_next_year") as mock_forecast:
         mock_forecast.return_value = pd.DataFrame({
             "date": pd.date_range("2024-01-01", periods=12, freq="MS"),
             "sector": [1] * 12,
@@ -172,7 +172,7 @@ def test_get_drift_report(mock_get_train_data, mock_get_registry, client, mock_m
     mock_get_train_data.return_value = mock_train_data
     
     # Mock detect_data_drift
-    with patch("src.api.routes.detect_data_drift") as mock_drift:
+    with patch("src.monitoring.detect_drift.detect_data_drift") as mock_drift:
         mock_drift.return_value = {
             "drift_detected": False,
             "drift_score": 0.05,
