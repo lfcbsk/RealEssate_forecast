@@ -11,8 +11,11 @@ __pycache__/
 *.pyo
 *.pyd
 .Python
+# Virtual Environments
 venv/
 .venv/
+env/
+ENV/
 .env
 .env.local
 .env.*

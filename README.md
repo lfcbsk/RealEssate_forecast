@@ -1,88 +1,51 @@
-# RealEssate_forecast
-
-## Project Structure
-
-```
 RealEssate_forecast/
-├── README.md                          # Project documentation
-├── .gitignore                         # Git ignore file
-├── Makefile                           # Make commands for development
-├── pyproject.toml                     # Python project configuration
-├── requirement.txt                    # Python dependencies
-├── .github/                           # GitHub configuration
-│   └── workflows/                     # CI/CD workflows
-│       ├── pr-checks.yml              # Pull request checks
-│       ├── ci.yml                     # Continuous Integration
-│       ├── cd.yml                     # Continuous Deployment
-│       └── build-and-push.yml         # Docker build and push
+├── README.md                          # Tài liệu dự án
+├── .gitignore                         
+├── .env.example                       # MỚI: Mẫu biến môi trường (API keys cloud, v.v.)
+├── Makefile                           # Lệnh shortcut (make up, make test, make train)
+├── pyproject.toml                     # Quản lý dependencies (Poetry/pip)
+├── .github/                           
+│   └── workflows/                     
+│       ├── pr-checks.yml              # Chạy pytest, lint khi có PR
+│       └── build-and-push.yml         # Build docker image và push lên Docker Hub
 ├── configs/
-│   └── config.yaml                    # Configuration settings
+│   └── config.yaml                    # Cấu hình: đường dẫn cloud storage, threshold drift, v.v.
 ├── data/
-│   ├── data_source.md                 # Data source documentation
-│   
-├── docker/                            # Docker configuration
-│   ├── api.Dockerfile
-│   ├── app.Dockerfile
-│   └── docker-compose.yml
-├── k8s/                               # Kubernetes configuration
-│   ├── configmap.yaml
-│   ├── cronjob.yaml
-│   ├── deployment.yaml
-│   ├── service.yaml
-│   └── monitor/                       # Monitoring configuration
-│       ├── grafana-dashboard.json
-│       ├── grafana.yaml
-│       └── prometheus.yaml
-├── notebooks/                         # Jupyter notebooks
-│   ├── eda.ipynb                      # Exploratory Data Analysis
-│   ├── main_nb.ipynb                  # Main analysis notebook
-│   ├── submission.csv
-│   ├── variable_dictionary.md
-├── src/                               # Source code
-│   ├── api/                           # API service
-│   │   ├── main.py
-│   │   ├── routes.py
-│   │   └── schemas.py
-│   ├── app/                           # Streamlit application
-│   │   └── streamlit_app.py
-│   ├── models/                        # Model management
-│   │   ├── model_config.py
-│   │   ├── model_registry.py
-│   │   └── retrain.py
-│   ├── monitoring/                    # Monitoring utilities
-│   │   ├── dectect_drift.py
-│   │   ├── log_report.py
-│   │   └── reference.py
-│   └── pipeline/                      # Data pipeline
-│       ├── evaluation.py
-│       ├── features.py
-│       ├── ingest.py
-│       ├── predict.py
-│       ├── preprocess.py
-│       └── training.py
-└── tests/                             # Test suite
+│   ├── data_source.md                 
+│   └── raw/                           # Dữ liệu thô (được .gitignore)
+├── docker/                            # TRUNG TÂM: Orchestrate mọi thứ bằng Docker Compose
+│   ├── api.Dockerfile                 # Image cho FastAPI
+│   ├── app.Dockerfile                 # Image cho Streamlit
+│   ├── airflow/                       # MỚI: Cấu hình Airflow
+│   │   ├── Dockerfile                 # Custom Airflow image (cài thêm src/ của bạn)
+│   │   ├── dags/                      # Thư mục chứa DAGs
+│   │   │   ├── train_pipeline.py      # DAG: Ingest -> Preprocess -> Train -> Push Cloud
+│   │   │   └── monitor_drift.py       # DAG: Chạy hàng tuần, check drift, gửi alert
+│   │   └── requirements.txt           # Deps riêng cho Airflow workers
+│   ├── prometheus/                    # MỚI: Cấu hình Prometheus
+│   │   └── prometheus.yml             # Khai báo targets (API metrics, Node exporter)
+│   ├── grafana/                       # MỚI: Cấu hình Grafana
+│   │   ├── provisioning/
+│   │   │   ├── datasources/
+│   │   │   │   └── prometheus.yml     # Tự động kết nối Prometheus khi khởi động
+│   │   │   └── dashboards/
+│   │   │       └── mlops-dashboard.json # Dashboard theo dõi MAE, Drift Score, API latency
+│   └── docker-compose.yml             # File duy nhất để chạy toàn bộ hệ thống
+├── notebooks/                         
+│   ├── eda.ipynb                      
+│   └── main_nb.ipynb                  
+├── scripts/                           # MỚI: Script tiện ích
+│   ├── upload_artifacts.py            # Script đẩy model.pkl, features.pkl lên Cloud
+│   └── download_artifacts.py          # Script tải artifacts từ Cloud về khi API khởi động
+├── src/                               
+│   ├── api/                           # FastAPI service
+│   ├── app/                           # Streamlit dashboard
+│   ├── models/                        # Model registry (logic load/save từ Cloud)
+│   ├── monitoring/                    # Drift detection, logging
+│   └── pipeline/                      # Ingest, features, training, evaluation
+└── tests/                             
     ├── conftest.py
     ├── test_evaluate.py
-    └── test_features.py
-```
-
-## Directory Descriptions
-
-- **.gitignore**: Git configuration to exclude files from version control
-- **Makefile**: Development commands and task automation
-- **pyproject.toml**: Python project metadata and build configuration
-- **requirement.txt**: Python package dependencies
-- **.github/**: GitHub configuration and CI/CD workflows
-  - **workflows/**: Automated workflow files for PR checks, CI, CD, and Docker builds
-- **configs/**: Project configuration files
-- **data/**: Training and test datasets
-- **docker/**: Docker and Docker Compose configuration for containerization
-- **k8s/**: Kubernetes manifests for deployment and monitoring
-- **notebooks/**: Jupyter notebooks for analysis and experimentation
-- **src/**: Main source code organized by module
-  - **api/**: FastAPI application endpoints and schemas
-  - **app/**: Streamlit web application
-  - **models/**: Machine learning model management and retraining
-  - **monitoring/**: Data drift detection and monitoring
-  - **pipeline/**: Data processing and model training pipeline
-- **tests/**: Unit tests for the project
+    ├── test_features.py
+    ├── test_ingest.py
+    └── test_drift.py
