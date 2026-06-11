@@ -96,7 +96,6 @@ async def get_forecast(request: ForecastRequest):
         if train_data is None or len(train_data) == 0:
             raise HTTPException(status_code=500, detail="Training data not available")
 
-        from src.pipeline.predict import forecast_next_year
 
         df_forecast = forecast_next_year(
             df=train_data,
