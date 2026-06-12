@@ -259,3 +259,34 @@ notebooks/submission.csv
 
 # data in kaggle competition
 *.csv
+
+# MLflow database (local tracking)
+mlflow.db
+
+# Training logs/outputs
+learn_error.tsv
+time_left.tsv
+events.out.tfevents*
+catboost_training.json
+cat_feature_index.*
+
+# MLflow - không bao giờ commit
+mlruns/
+MLmodel
+python_env.yaml
+conda.yaml
+
+# Python cache
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
