@@ -186,7 +186,6 @@ async def predict_single(request: PredictRequest):
 async def upload_file(file: UploadFile = File(...)):
     """
     Upload CSV/Excel file for batch prediction.
-
     File must contain required feature columns.
     """
     try:
