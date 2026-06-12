@@ -262,7 +262,7 @@ notebooks/submission.csv
 
 # MLflow database (local tracking)
 mlflow.db
-
+mlruns.db
 # Training logs/outputs
 learn_error.tsv
 time_left.tsv
@@ -290,3 +290,5 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+*.json
+drift_report_*.json
