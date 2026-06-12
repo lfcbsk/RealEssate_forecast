@@ -2,7 +2,7 @@
 
 import io
 import logging
-from typing import  Optional
+from typing import Optional
 import pandas as pd
 import mlflow
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
