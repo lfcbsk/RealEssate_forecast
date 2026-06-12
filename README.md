@@ -1,100 +1,296 @@
 # RealEssate Forecast
 
-MLOps pipeline for **China Real Estate Demand Prediction** — forecast monthly new-house transaction volumes across 96 sectors using CatBoost, served via FastAPI (ONNX) and a Streamlit dashboard, with MLflow tracking and drift-based retraining.
-
-**Data:** [Kaggle — China Real Estate Demand Prediction](https://www.kaggle.com/competitions/china-real-estate-demand-prediction/data)
+End-to-end **MLOps pipeline** for the Kaggle competition [**China Real Estate Demand Prediction**](https://www.kaggle.com/competitions/china-real-estate-demand-prediction). The system forecasts **monthly new-house transaction volumes** across **96 property sectors**, packages the model for production (**ONNX**), and exposes it through **FastAPI**, **Streamlit**, automated **drift monitoring**, and **CI/CD**.
 
 ---
 
-## Prerequisites
+## Table of contents
 
-- **[uv](https://docs.astral.sh/uv/)** — Python package & environment manager (same tool used in CI)
-- Git
-- (Optional) Docker & Docker Compose
-- Kaggle account to download competition CSVs
+1. [Context & problem](#1-context--problem)
+2. [Project purpose](#2-project-purpose)
+3. [Competition metric](#3-competition-metric)
+4. [Model results](#4-model-results)
+   - [4.1 CV](#41-cross-validation-train-portion) · [4.2 Holdout](#42-holdout-test-set-local-20-split) · [4.3 Kaggle](#43-kaggle-leaderboard-external-test) · [4.4 Feature importance](#44-feature-importance--model-insights)
+5. [System architecture](#5-system-architecture)
+6. [Project structure](#6-project-structure)
+7. [Prerequisites](#7-prerequisites)
+8. [Step-by-step guide](#8-step-by-step-guide)
+9. [API reference](#9-api-reference)
+10. [Configuration](#10-configuration)
+11. [Tests & CI/CD](#11-tests--cicd)
+12. [License](#12-license)
 
 ---
 
-## Project structure
+## 1. Context & problem
+
+### Business context
+
+China's residential market is highly **sectorized** — each city district / property cluster behaves differently. Developers and planners need reliable **month-ahead demand forecasts** to allocate inventory, pricing, and marketing spend.
+
+The Kaggle competition provides historical monthly panels:
+
+| Property | Value |
+|----------|-------|
+| **Granularity** | month × sector (96 sectors) |
+| **Target** | `amount_new_house_transactions` |
+| **Zero rate** | ~60%+ sector-months have zero transactions |
+| **Exogenous signals** | nearby-sector activity, pre-owned market, sell-through, supply |
+
+### Modelling challenges
+
+- **Sparsity** — most sector-months are zero; naive averages fail badly.
+- **Regime shifts** — COVID shock (2020), bull run (2021), policy tightening (2022–2024).
+- **Leakage risk** — random CV inflates scores; we use **chronological TimeSeriesSplit**.
+- **Custom metric** — Kaggle ranks by a two-stage **Competition Score**, not plain RMSE/R².
+
+This repository turns the competition solution into a **production-ready MLOps stack**: reproducible training, artifact registry, serving, drift checks, and observability.
+
+---
+
+## 2. Project purpose
+
+| Goal | Implementation |
+|------|----------------|
+| Accurate forecasting under competition metric | CatBoost + Optuna + zero-sector rules |
+| Reproducible pipeline | `src/pipeline/` — ingest → features → train → evaluate |
+| Production inference | ONNX model + `ModelRegistry` |
+| Operational monitoring | Drift detection, Prometheus, Grafana |
+| Human-in-the-loop | Streamlit upload / forecast / monitoring pages |
+| Automation | GitHub Actions (test, build, weekly orchestration) |
+
+**What this repo is:** a portfolio-grade ML system built on real competition data.
+
+**What it is not:** a simple notebook export — training, serving, monitoring, and retrain gates are first-class components.
+
+---
+
+## 3. Competition metric
+
+The official **Competition Score** (implemented in `src/pipeline/evaluation.py`):
+
+1. **Stage 1 — bad-rate gate:** if more than 30% of predictions have APE > 100%, score = **0**.
+2. **Stage 2 — refined MAPE:** on remaining "good" predictions:
+
+$$\text{Score} = 1 - \frac{\text{MAPE}_{\text{good}}}{\text{good\_rate}}$$
+
+Higher is better (max ≈ 1.0). This metric penalizes catastrophic errors more than R², which is why **Competition Score is the primary metric** for model selection and registry gates.
+
+---
+
+## 4. Model results
+
+All scores below use the same **temporal 80/20 holdout** (last 20% months as test) and **5-fold TimeSeriesSplit CV** on the train portion, unless noted.
+
+### 4.1 Cross-validation (train portion)
+
+| Model | CV Competition Score | CV MAE | CV R² |
+|-------|---------------------:|-------:|------:|
+| **CatBoost baseline** (default hyperparams) | 0.198 ± 0.24 | 16,759 | 0.420 |
+| **LightGBM baseline** | 0.000 ± 0.00 | 19,986 | 0.362 |
+| **CatBoost + Optuna** (50 trials) | **0.519 ± 0.062** | 15,602 | 0.394 |
+| LightGBM + Optuna (50 trials) | 0.457 ± 0.073 | 16,463 | 0.371 |
+
+Optuna tuning improves CatBoost CV score by **~2.6×** over the default baseline.
+
+### 4.2 Holdout test set (local 20% split)
+
+Comparison on the **same temporal test set** after full pipeline training:
+
+| Metric | CatBoost baseline | CatBoost tuned (production) |
+|--------|------------------:|--------------------------:|
+| **Competition Score** | 0.198 | **0.551** |
+| MAE | 16,759 | **15,653** |
+| RMSE | 39,437 | 39,507 |
+| R² | 0.420 | 0.395 |
+| Bad rate (APE > 100%) | high | reduced |
+
+Tuned model **holdout evaluation** (final pipeline run, notebook + `training.py`):
+
+| Metric | Value |
+|--------|------:|
+| **Competition Score** | **0.564** |
+| MAE | 10,352 |
+| RMSE | 24,930 |
+| R² | 0.473 |
+| Bad rate | 12.4% |
+
+> R² slightly drops after tuning while **Competition Score rises ~178%** — expected, because the competition metric prioritizes avoiding catastrophic errors over maximizing explained variance.
+
+### 4.3 Kaggle leaderboard (external test)
+
+Scores submitted to the competition platform:
+
+| Split | Competition Score |
+|-------|------------------:|
+| **Public test** | **0.55** |
+| **Private / hidden test** | **0.42** |
+
+The gap between public (0.55) and hidden (0.42) reflects **distribution shift** on the unreleased test period — motivating the drift-monitoring and retrain orchestration built into this project.
+
+### 4.4 Feature importance & model insights
+
+Feature importance from the production **CatBoost** model (`notebooks/main_nb.ipynb`, top-30 by gain). Values are relative CatBoost importance scores — higher means the model relies on that signal more when splitting trees.
+
+| Rank | Feature | Importance | Group |
+|-----:|---------|----------:|-------|
+| 1 | `zero_rate_6` | 15.97 | Sparsity / liquidity |
+| 2 | `zero_rate_12` | 8.23 | Sparsity / liquidity |
+| 3 | `rolling_max_12` | 7.83 | Rolling stats |
+| 4 | `lag_1` | 7.25 | Short-term history |
+| 5 | `sector_mean_train` | 5.89 | Sector profile |
+| 6 | `rolling_mean_3` | 5.19 | Rolling stats |
+| 7 | `trend_strength` | 4.94 | Volatility / regime |
+| 8 | `sector_zero_rate_train` | 4.76 | Sector profile |
+| 9 | `sellthrough_lag1` | 3.84 | Supply–demand |
+| 10 | `rolling_std_3` | 3.80 | Rolling stats |
+| 11 | `lag_2` | 3.35 | Short-term history |
+| 12 | `nearby_supply_lag1` | 2.97 | Cross-sector spillover |
+| 13 | `volatility_ratio` | 2.57 | Volatility / regime |
+| 14–30 | lags, rolling means, `month`, `yoy_*`, … | 0.6–2.5 | Secondary |
+
+**Feature groups in the pipeline** (`src/pipeline/features.py`):
+
+- **Temporal:** `lag_1/2/3/6/12`, rolling mean/std/max/min, momentum, YoY
+- **Sparsity:** `zero_rate_6`, `zero_rate_12` + zero-sector rule (85%+ zero → predict 0)
+- **Sector profile:** `sector_mean_train`, `sector_zero_rate_train`, `sector_cv_train`, `sector_type`
+- **Regime:** COVID / bull / tightening flags (`regime`, `regime_month_*`)
+- **Cross-market (lag-1):** nearby supply, sell-through, price; pre-owned area
+
+#### Key insights
+
+**1. Market inactivity is the strongest signal**
+
+`zero_rate_6` and `zero_rate_12` rank #1 and #2. The model learns whether a sector has entered a **low-liquidity / near-frozen** state — often more informative than price or calendar seasonality. This matches the 2019–2024 downturn when many districts saw long stretches with zero transactions.
+
+**2. Recent history dominates**
+
+`lag_1`, `lag_2`, `lag_3` and short rolling windows carry high importance. Real estate demand is **strongly autocorrelated**: weak months tend to persist, especially under policy stress or credit tightening.
+
+**3. Rolling statistics beat simple linear trend**
+
+`rolling_max_12`, `rolling_mean_3/6`, and rolling std matter more than a single long-term slope. In volatile regimes, **current level and recent volatility** are better predictors than extrapolating a straight trend.
+
+**4. Sector heterogeneity is essential**
+
+`sector_mean_train`, `sector_zero_rate_train`, and `sector_cv_train` are top-tier features. Each of the 96 sectors has distinct baseline volume, sparsity, and volatility — a global model without sector context would underperform.
+
+**5. Sell-through reflects real demand**
+
+`sellthrough_lag1` (inventory absorption speed) is among the top exogenous signals. High sell-through → tighter market; low sell-through → excess supply and weaker buyer confidence.
+
+**6. Neighboring sectors spill over**
+
+`nearby_supply_lag1` and `nearby_price_lag1` add meaningful signal. Local markets are **not independent** — buyers substitute across adjacent districts; developers compete on price and inventory.
+
+**7. Seasonality is secondary in stressed markets**
+
+Calendar features (`month`, `regime_month_cos`) rank low. During major shocks (COVID, developer debt crisis, policy tightening), **structural liquidity and confidence** outweigh normal seasonal patterns.
+
+**8. YoY features add limited value under regime shift**
+
+`yoy_diff` and `yoy_ratio` sit near the bottom. When the market shifts regime, **same-month-last-year** comparisons become unreliable; recent monthly dynamics are more useful.
+
+#### Macroeconomic context (2019–2024)
+
+The training window covers COVID shock (2020), a short bull run (2021), and prolonged policy tightening plus developer distress (2022–2024). In such a **stressed market**, the model correctly prioritizes liquidity signals (`zero_rate_*`, sell-through) over stable-era patterns (seasonality, YoY). That also explains why **public leaderboard (0.55)** outperforms **hidden test (0.42)**: the unreleased period likely continued shifting away from patterns seen in public validation months.
+
+#### Design implications for this repo
+
+| Insight | How the pipeline uses it |
+|---------|--------------------------|
+| Sparsity dominates | Zero-sector mask + `zero_rate_*` features |
+| Short memory wins | Lag/rolling features with strict `shift(1)` to avoid leakage |
+| Sector-specific behavior | Per-sector stats computed only on train fold |
+| Cross-sector signal | Nearby & pre-owned CSVs merged at ingest |
+| Public vs hidden gap (0.55 → 0.42) | Drift reference saved at train time; orchestrator can retrain |
+
+> Reproduce the importance plot: run the feature-importance cell at the end of `notebooks/main_nb.ipynb` after training `final_model`.
+
+---
+
+## 5. System architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        DATA LAYER                               │
+│  data/train/*.csv  ──► ingest_preprocess  ──► feature engineering │
+└───────────────────────────────┬─────────────────────────────────┘
+                                ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                      TRAINING LAYER                             │
+│  Optuna tuning → TimeSeriesSplit CV → holdout eval              │
+│  → production retrain → artifacts/ (ONNX, pickles, reference)   │
+│  → MLflow tracking (mlruns/)                                    │
+└───────────────────────────────┬─────────────────────────────────┘
+                                ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                      SERVING LAYER                              │
+│  FastAPI (ONNX inference)  │  Streamlit dashboard               │
+│  POST /upload/raw (3 CSVs) │  Upload → merge → predict          │
+└───────────────────────────────┬─────────────────────────────────┘
+                                ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                      MLOPS LAYER                                │
+│  Drift detection → orchestrator → registry gate → promote       │
+│  Prometheus + Grafana (CPU/RAM/GPU, latency p95/p99, errors)    │
+│  GitHub Actions (CI, orchestration schedule)                    │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Drift → retrain flow:**
+
+```
+New data → detect_data_drift() vs artifacts/reference.parquet
+         → severity low?  STOP
+         → else retrain → holdout eval → registry gate (score ≥ 0.50)
+         → promote ONNX + refresh reference.parquet
+```
+
+---
+
+## 6. Project structure
 
 ```
 RealEssate_forecast/
-├── README.md
-├── pyproject.toml                 # Dependencies & pytest config
-├── configs/
-│   └── config.yaml                # Data paths, CV, Optuna, orchestration gates
+├── configs/config.yaml           # Paths, CV, Optuna, orchestration gates
 ├── data/
-│   ├── data_source.md             # Dataset notes
-│   └── train/                     # Competition CSVs (gitignored — you add these)
-│       ├── new_house_transactions.csv
-│       ├── new_house_transactions_nearby_sectors.csv
-│       └── pre_owned_house_transactions.csv
-├── docker/
-│   ├── api.Dockerfile
-│   ├── app.Dockerfile
-│   ├── docker-compose.yml         # API + Streamlit + Prometheus + Grafana
-│   ├── prometheus/
-│   │   └── prometheus.yml
-│   └── grafana/
-│       ├── provisioning/          # Auto-config datasource & dashboards
-│       └── dashboards/
-│           └── mlops-overview.json
-├── notebooks/
-│   ├── eda.ipynb
-│   ├── main_nb.ipynb
-│   └── variable_dictionary.md
+│   ├── data_source.md
+│   └── train/                    # 3 Kaggle CSVs (gitignored)
+├── docker/                       # Compose: API, Streamlit, Prometheus, Grafana
+├── notebooks/                    # EDA & experiment notebooks
 ├── src/
-│   ├── api/                       # FastAPI REST service
-│   │   ├── main.py
-│   │   ├── routes.py              # /health, /forecast, /predict, /drift, …
-│   │   └── schemas.py
-│   ├── app/
-│   │   ├── streamlit_app.py       # Home page
-│   │   ├── utils.py               # Upload/merge CSV, local predict helpers
-│   │   └── pages/
-│   │       ├── 1_📤_predict.py    # Upload 3 raw CSVs → merge → predict
-│   │       ├── 2_📈_forecast.py   # Multi-month sector forecast
-│   │       └── 3_📊_monitoring.py # Drift & metrics dashboard
-│   ├── models/
-│   │   ├── model_config.py        # Artifact paths (artifacts/)
-│   │   ├── model_registry.py      # ONNX Runtime inference
-│   │   └── retrain.py             # Final fit + save ONNX/pickles
-│   ├── monitoring/
-│   │   ├── detect_drift.py        # PSI, KS, concept drift
-│   │   ├── reference.py           # Reference parquet for drift baseline
-│   │   └── log_report.py          # Drift report JSON export
-│   ├── pipeline/
-│   │   ├── ingest_preprocess.py   # Load/merge CSVs, impute, train/test split
-│   │   ├── features.py            # Lag, rolling, regime, sector features
-│   │   ├── training.py            # Optuna + TimeSeriesSplit CV + MLflow
-│   │   ├── evaluation.py          # Competition score & holdout metrics
-│   │   ├── predict.py             # Recursive multi-month forecast
-│   │   └── orchestrator.py        # Drift → retrain → registry workflow
-│   └── utils/
-│       └── config.py
-├── tests/                         # pytest suite (unit + integration)
-├── artifacts/                     # Model outputs (gitignored — created by training)
-│   ├── model.onnx
-│   ├── feature_list.pkl
-│   ├── sector_stats.pkl
-│   ├── sector_profile.pkl
-│   ├── zero_sectors.pkl
-│   └── reference.parquet
-├── reports/                       # Drift monitoring JSON reports
-├── mlruns/                        # MLflow experiment tracking
-└── .github/workflows/
-    ├── pr-checks.yml              # Tests, lint, Docker build on PR
-    ├── build-and-push.yml         # Build & push images to GHCR on main
-    └── orchestration.yml          # Scheduled drift check + optional retrain
+│   ├── api/                      # FastAPI + /metrics
+│   ├── app/                      # Streamlit multipage dashboard
+│   ├── models/                   # ONNX registry, retrain, artifacts
+│   ├── monitoring/               # Drift, reference, Prometheus gauges
+│   └── pipeline/                 # Ingest, features, training, orchestrator
+├── artifacts/                    # model.onnx, pickles, reference.parquet
+├── tests/
+└── .github/workflows/            # pr-checks, build-and-push, orchestration
 ```
 
 ---
 
-## End-to-end workflow
+## 7. Prerequisites
 
-### 1. Clone and set up environment (uv)
+| Tool | Version | Purpose |
+|------|---------|---------|
+| [uv](https://docs.astral.sh/uv/) | latest | Python env & deps (same as CI) |
+| Python | **3.10+** | Runtime |
+| Git | any | Clone repo |
+| Kaggle account | — | Download competition CSVs |
+| Docker (optional) | — | Full stack + monitoring |
 
-Install **uv** if you do not have it yet:
+---
+
+## 8. Step-by-step guide
+
+> Run all commands from the **project root**. Prefix with `uv run` if the virtualenv is not activated.
+
+### Phase A — Environment setup (one time)
+
+**A1. Install uv**
 
 ```bash
 # macOS / Linux
@@ -104,177 +300,133 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 ```
 
-Clone the repo and create the project environment:
+**A2. Clone & create environment**
 
 ```bash
 git clone https://github.com/lfcbsk/RealEssate_forecast.git
 cd RealEssate_forecast
 
-# Install Python 3.10 and create a local .venv (matches CI)
 uv python install 3.10
 uv venv --python 3.10
 uv pip install -e ".[dev]"
 ```
 
-Activate the virtual environment (optional — you can use `uv run` instead):
+**A3. Verify install**
 
 ```bash
-# macOS / Linux
-source .venv/bin/activate
-
-# Windows (PowerShell)
-.venv\Scripts\Activate.ps1
+uv run pytest tests/ -q -m "not e2e"
 ```
 
-Run any command through uv without activating:
+---
+
+### Phase B — Data preparation (one time)
+
+**B1. Download Kaggle data**
 
 ```bash
-uv run python -m src.pipeline.training
-uv run pytest tests/ -v
-```
-
-> All commands below assume you are in the project root with the uv environment installed. Prefix with `uv run` if the venv is not activated.
-
-### 2. Download data
-
-Place the three Kaggle CSVs under `data/train/`:
-
-```bash
-# Requires Kaggle API credentials (~/.kaggle/kaggle.json)
+# Requires ~/.kaggle/kaggle.json
 kaggle competitions download -c china-real-estate-demand-prediction -p data/train/
-cd data/train && unzip china-real-estate-demand-prediction.zip
+cd data/train && unzip china-real-estate-demand-prediction.zip && cd ../..
 ```
 
-Expected files (see `configs/config.yaml` → `data.train_dir`):
+**B2. Confirm required files**
 
-| File | Description |
-|------|-------------|
-| `new_house_transactions.csv` | Main target sector transactions |
-| `new_house_transactions_nearby_sectors.csv` | Nearby sector features |
-| `pre_owned_house_transactions.csv` | Pre-owned market features |
+```
+data/train/
+├── new_house_transactions.csv
+├── new_house_transactions_nearby_sectors.csv
+└── pre_owned_house_transactions.csv
+```
 
-### 3. Train the model
+---
 
-Full pipeline: ingest → feature engineering → Optuna tuning → 5-fold time-series CV → holdout eval → production model → save artifacts.
+### Phase C — Train model (required before serving)
+
+**C1. Full training pipeline**
 
 ```bash
 uv run python -m src.pipeline.training
 ```
 
-This will:
+Pipeline steps executed automatically:
 
-1. Load and preprocess data from `data/train/`
-2. Tune CatBoost hyperparameters (50 Optuna trials by default)
-3. Run leakage-safe TimeSeriesSplit cross-validation
-4. Evaluate on temporal holdout
-5. Retrain on full data and write artifacts to `artifacts/`:
-   - `model.onnx` — production ONNX model
-   - `feature_list.pkl`, `sector_stats.pkl`, `sector_profile.pkl`, `zero_sectors.pkl`
-6. Log experiments to MLflow (`mlruns/`, experiment: `catboost_timeseries`)
+| Step | Action |
+|------|--------|
+| 0 | Ingest & merge 3 CSVs, impute, build month×sector grid |
+| 1 | Identify zero-sectors (85%+ zero rate) |
+| 2 | Optuna hyperparameter search (50 trials, CatBoost) |
+| 3 | 5-fold TimeSeriesSplit CV with leakage-safe features |
+| 4 | Retrain on train → **holdout evaluation** on test split |
+| 5 | Retrain production model on full data |
+| 6 | Save `artifacts/model.onnx` + pickles |
+| 7 | Save drift reference `artifacts/reference.parquet` + stats |
 
-**Tune settings** in `configs/config.yaml`:
-
-```yaml
-optimization:
-  n_trials: 50      # reduce for faster runs, e.g. 5
-cv:
-  n_splits: 5
-```
-
-**Programmatic training** (from Python):
+**C2. Quick train (fewer Optuna trials, for testing)**
 
 ```python
 from src.pipeline.training import run_pipeline
-
-results = run_pipeline(tune=True, n_trials=10)
-print(results["test_results"])
+run_pipeline(tune=True, n_trials=5)
 ```
 
-### 4. Drift reference baseline (automatic)
-
-Training **automatically** saves the drift reference after Step 6:
-
-- `artifacts/reference.parquet` — baseline dataset for drift detection
-- `artifacts/reference_stats.json` — column statistics
-
-No manual step needed if you run:
-
-```bash
-uv run python -m src.pipeline.training
-```
-
-To refresh the baseline manually (e.g. after uploading new data without retraining):
+**C3. Baseline only (no tuning)**
 
 ```python
-from src.pipeline.ingest_preprocess import run as ingest_run
-from src.monitoring.reference import save_reference_dataset, save_reference_statistics
-
-df_train, _ = ingest_run(test_ratio=0.2, save_outputs=False)
-save_reference_dataset(df_train)
-save_reference_statistics(df_train)
+run_pipeline(tune=False)
 ```
 
-### 5. Run drift → retrain → registry orchestration
-
-Triggered by GitHub Action (`orchestration.yml`) or manually:
+**C4. Check outputs**
 
 ```
-GitHub Action
-      ↓
-orchestrator.py
-      ↓
-load data (CSVs)
-      ↓
-load prod model (artifacts/model.onnx)
-      ↓
-detect_data_drift()          ← src/monitoring/detect_drift.py
-      ↓
-severity == low?
-      ├── YES → stop
-      └── NO → retrain → evaluate → registry gate → promote
-                                    ↓
-                         artifacts/reference.parquet updated
+artifacts/
+├── model.onnx
+├── feature_list.pkl
+├── sector_stats.pkl
+├── sector_profile.pkl
+├── zero_sectors.pkl
+├── reference.parquet
+└── reference_stats.json
+mlruns/                  # MLflow experiment: catboost_timeseries
 ```
 
-```bash
-# Fast retrain (no Optuna) — recommended for routine checks
-uv run python -m src.pipeline.orchestrator --tune false --promote true
+---
 
-# Full retrain with Optuna tuning
-uv run python -m src.pipeline.orchestrator --tune true --promote true --n-trials 10
-```
+### Phase D — Serve & use the model
 
-- **Reference baseline:** `artifacts/reference.parquet` (auto-created on first run if missing; refreshed on promote)
-- **Drift reports:** saved under `reports/`
-
-**Registry gates** (`configs/config.yaml` → `orchestration.registry`):
-
-| Gate | Default | Meaning |
-|------|---------|---------|
-| `min_competition_score` | 0.55 | Minimum holdout competition score |
-| `min_r2` | 0.0 | Minimum R² |
-| `max_mape` | 100.0 | Maximum MAPE (%) |
-| `require_improvement_over_current` | false | New model must beat current score |
-
-### 6. Start the API
+**D1. Start API**
 
 ```bash
 uv run uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/v1/health` | GET | Health check |
-| `/api/v1/forecast` | POST | Multi-month forecast (`{"n_months": 12}`) |
-| `/api/v1/predict` | POST | Single-row prediction from features |
-| `/api/v1/sectors` | GET | Sector list and zero-sector info |
-| `/api/v1/metrics` | GET | MLflow run metrics |
-| `/api/v1/drift` | GET | Drift report |
-| `/api/v1/upload/raw` | POST | Upload 3 raw CSVs → merge into `data/train/` → predict |
-| `/api/v1/upload` | POST | Batch predict from pre-engineered features (single file) |
-| `/docs` | GET | Swagger UI |
+Open Swagger UI: [http://localhost:8000/docs](http://localhost:8000/docs)
 
-**Example forecast:**
+**D2. Start Streamlit dashboard**
+
+```bash
+uv run streamlit run src/app/streamlit_app.py
+```
+
+Open: [http://localhost:8501](http://localhost:8501)
+
+| Page | What it does |
+|------|--------------|
+| **Home** | Overview, MLflow baseline metrics |
+| **📤 Upload & Predict** | Upload 3 raw CSVs → merge into `data/train/` → predict |
+| **📈 Sector Forecast** | Recursive 1–36 month forecast |
+| **📊 Monitoring** | Drift, MLflow metrics, file health |
+
+**D3. Upload new raw data (Streamlit or API)**
+
+Data is **appended** to `data/train/*.csv`; duplicate `(month, sector)` rows are **overwritten**.
+
+```bash
+curl -X POST http://localhost:8000/api/v1/upload/raw \
+  -F "main=@new_house_transactions.csv" \
+  -F "nearby=@new_house_transactions_nearby_sectors.csv" \
+  -F "pre=@pre_owned_house_transactions.csv"
+```
+
+**D4. Example forecast**
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/forecast \
@@ -282,102 +434,99 @@ curl -X POST http://localhost:8000/api/v1/forecast \
   -d '{"n_months": 12}'
 ```
 
-### 7. Start the Streamlit dashboard
+---
+
+### Phase E — MLOps: drift check & retrain
+
+**E1. Manual orchestration**
 
 ```bash
-uv run streamlit run src/app/streamlit_app.py
+# Fast retrain (no Optuna) — routine check
+uv run python -m src.pipeline.orchestrator --tune false --promote true
+
+# Full retrain with Optuna
+uv run python -m src.pipeline.orchestrator --tune true --promote true --n-trials 10
 ```
 
-Open [http://localhost:8501](http://localhost:8501)
+**E2. Registry promotion gates** (`configs/config.yaml`)
 
-| Page | Purpose |
-|------|---------|
-| **Home** | Overview & quick start |
-| **📤 Upload & Predict** | Upload 3 raw CSVs → append/overwrite `data/train/` → merge → feature engineer → ONNX predict |
-| **📈 Sector Forecast** | Recursive multi-month forecast from merged CSV data |
-| **📊 Monitoring** | Drift, MLflow metrics, data file status |
+| Gate | Default | Meaning |
+|------|---------|---------|
+| `min_competition_score` | 0.50 | Minimum holdout score to promote model |
+| `min_r2` | 0.0 | Minimum R² on holdout |
+| `max_mape` | 150.0 | Maximum MAPE (%) |
 
-**Upload flow (no separate database):**
+Drift reports saved under `reports/`.
 
-```
-User uploads 3 raw CSV files
-        ↓
-Append + overwrite duplicates (month, sector) → data/train/*.csv
-        ↓
-load_and_merge → create_training_features → ModelRegistry.predict
-        ↓
-Download predictions CSV
-```
+**E3. Scheduled run (GitHub Actions)**
 
-### 8. Run with Docker + Monitoring (Prometheus & Grafana)
+Workflow `orchestration.yml` — weekly + manual `workflow_dispatch`.
+
+---
+
+### Phase F — Docker + monitoring (optional)
+
+**F1. Start full stack**
 
 ```bash
 cd docker
 docker compose up --build
 ```
 
-| Service | URL | Purpose |
-|---------|-----|---------|
-| API | http://localhost:8000 | FastAPI + `/metrics` |
-| Dashboard | http://localhost:8501 | Streamlit |
-| **Grafana** | http://localhost:3000 | Dashboards (`admin` / `admin`) |
-| **Prometheus** | http://localhost:9090 | Metrics store |
-| cAdvisor | http://localhost:8080 | Container metrics UI |
-| Node exporter | http://localhost:9100/metrics | Host CPU/RAM |
+| Service | URL | Credentials |
+|---------|-----|-------------|
+| API | http://localhost:8000 | — |
+| Streamlit | http://localhost:8501 | — |
+| Grafana | http://localhost:3000 | `admin` / `admin` |
+| Prometheus | http://localhost:9090 | — |
 
-**Grafana dashboard** (`RealEstate MLOps Overview`):
-
-- CPU / RAM (host + containers)
-- GPU utilization (optional, see below)
-- API request rate, latency **p95 / p99**
-- Error rate **4xx / 5xx**
-- System health: model loaded, train CSVs, MLflow DB, scrape targets
-
-**GPU monitoring** (Linux + NVIDIA Container Toolkit):
+**F2. GPU monitoring (Linux + NVIDIA)**
 
 ```bash
-cd docker
 docker compose --profile gpu up --build
 ```
 
-**Local API metrics** (without Docker):
-
-```bash
-uv run uvicorn src.api.main:app --reload
-curl http://localhost:8000/metrics
-```
-
-> Mount `artifacts/` and `data/train/` into containers before serving. Compose maps `../artifacts` and `../data`.
+Grafana dashboard **RealEstate MLOps Overview** includes: CPU/RAM, GPU util, API request rate, latency **p95/p99**, 4xx/5xx error rate, model/data/MLflow health.
 
 ---
 
-## Tests and CI
+### Quick checklist (first time)
 
-```bash
-# Run all tests (same as CI)
-uv run pytest tests/ -v -m "not e2e"
-
-# With coverage (CI gate: 50%)
-uv run pytest tests/ --cov=src --cov-fail-under=50
 ```
-
-**GitHub Actions workflows:**
-
-| Workflow | Trigger | Purpose |
-|----------|---------|---------|
-| `pr-checks.yml` | PR / push to `main`, `develop` | pytest, lint, Docker build |
-| `build-and-push.yml` | push to `main`, tags `v*` | Build & push API/app images to GHCR |
-| `orchestration.yml` | Weekly + manual dispatch | Drift check and optional retrain |
+[ ] A2  uv venv + pip install -e ".[dev]"
+[ ] B1  Download 3 CSVs → data/train/
+[ ] C1  uv run python -m src.pipeline.training
+[ ] D1  uv run uvicorn src.api.main:app --reload
+[ ] D2  uv run streamlit run src/app/streamlit_app.py
+[ ] A3  uv run pytest tests/ -v
+```
 
 ---
 
-## Configuration reference
+## 9. API reference
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/health` | GET | Health check |
+| `/api/v1/forecast` | POST | Multi-month recursive forecast |
+| `/api/v1/predict` | POST | Single-row prediction (feature dict) |
+| `/api/v1/upload/raw` | POST | Upload 3 raw CSVs → merge → predict |
+| `/api/v1/upload` | POST | Batch predict (pre-engineered features, 1 file) |
+| `/api/v1/sectors` | GET | Sector list & zero-sector info |
+| `/api/v1/metrics` | GET | MLflow run metrics |
+| `/api/v1/drift` | GET | Drift detection report |
+| `/metrics` | GET | Prometheus exposition format |
+| `/docs` | GET | Swagger UI |
+
+---
+
+## 10. Configuration
 
 `configs/config.yaml`:
 
 ```yaml
 data:
-  train_dir: "../data/train/"
+  train_dir: "./data/train/"
 
 target:
   column: amount_new_house_transactions
@@ -387,31 +536,35 @@ cv:
   n_splits: 5
 
 optimization:
-  n_trials: 50
+  n_trials: 50          # reduce to 5 for quick experiments
 
 orchestration:
   drift:
     feature_drift_ratio_threshold: 0.2
     severity_for_retrain: ["medium", "high"]
   registry:
-    min_competition_score: 0.55
+    min_competition_score: 0.5    # tune to 0.55 to match Kaggle public baseline
     min_r2: 0.0
-    max_mape: 100.0
+    max_mape: 150.0
 ```
 
 ---
 
-## Typical first-time checklist
+## 11. Tests & CI/CD
 
-1. Install uv → `uv python install 3.10` → `uv venv --python 3.10` → `uv pip install -e ".[dev]"`
-2. Download CSVs → `data/train/`
-3. `uv run python -m src.pipeline.training` (also saves drift reference)
-4. `uv run uvicorn src.api.main:app --reload`
-5. `uv run streamlit run src/app/streamlit_app.py`
-6. `uv run pytest tests/ -v` to verify everything works
+```bash
+uv run pytest tests/ -v -m "not e2e"
+uv run pytest tests/ --cov=src --cov-fail-under=50
+```
+
+| Workflow | Trigger | Purpose |
+|----------|---------|---------|
+| `pr-checks.yml` | PR / push | pytest, lint, Docker build |
+| `build-and-push.yml` | push `main`, tags | GHCR image publish |
+| `orchestration.yml` | weekly + manual | Drift check & optional retrain |
 
 ---
 
-## License
+## 12. License
 
 See repository for license details.
