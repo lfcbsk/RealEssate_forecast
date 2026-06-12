@@ -7,10 +7,13 @@ import pandas as pd
 import pytest
 
 from src.monitoring.log_report import evaluate_retrain_decision
-from src.pipeline.orchestrator import (RegistryGate,
-                                       detect_drift_against_reference,
-                                       evaluate_for_registry,
-                                       run_orchestration, should_retrain)
+from src.pipeline.orchestrator import (
+    RegistryGate,
+    detect_drift_against_reference,
+    evaluate_for_registry,
+    run_orchestration,
+    should_retrain,
+)
 
 
 @pytest.fixture

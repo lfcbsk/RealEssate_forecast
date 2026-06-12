@@ -4,11 +4,14 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.pipeline.features import (apply_zero_sector_rule, assign_regime,
-                                   build_sector_profile,
-                                   build_zero_sector_mask,
-                                   compute_sector_stats,
-                                   create_training_features)
+from src.pipeline.features import (
+    apply_zero_sector_rule,
+    assign_regime,
+    build_sector_profile,
+    build_zero_sector_mask,
+    compute_sector_stats,
+    create_training_features,
+)
 
 
 @pytest.fixture

@@ -4,13 +4,15 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.monitoring.detect_drift import (analyze_feature_drift_stats,
-                                         calculate_psi,
-                                         check_data_quality_drift,
-                                         detect_concept_drift_comprehensive,
-                                         detect_data_drift,
-                                         detect_distribution_drift,
-                                         page_hinkley_test)
+from src.monitoring.detect_drift import (
+    analyze_feature_drift_stats,
+    calculate_psi,
+    check_data_quality_drift,
+    detect_concept_drift_comprehensive,
+    detect_data_drift,
+    detect_distribution_drift,
+    page_hinkley_test,
+)
 
 
 @pytest.fixture
