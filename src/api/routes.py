@@ -19,11 +19,20 @@ from src.api.schemas import (
     MetricsResponse,
     PredictRequest,
     PredictResponse,
+    RawFileStats,
+    RawUploadPrediction,
+    RawUploadResponse,
     SectorInfo,
     SectorsResponse,
     UploadResponse,
 )
 from src.monitoring.detect_drift import detect_data_drift
+from src.pipeline.data_store import (
+    get_train_dir,
+    load_merged_training_data,
+    process_raw_upload,
+    read_upload_bytes,
+)
 from src.pipeline.predict import forecast_next_year
 from src.utils.config import load_config
 
@@ -54,20 +63,20 @@ def get_model_registry():
 
 
 def get_train_data():
-    """Load training data for forecasting."""
+    """Load merged training data (3 CSVs → merge → grid)."""
     global _train_data
     if _train_data is None:
-        from pathlib import Path
-
-        train_dir = Path("data/train")
-        if train_dir.exists():
-            df_parts = []
-            for file in train_dir.glob("*.csv"):
-                df_parts.append(pd.read_csv(file))
-            if df_parts:
-                _train_data = pd.concat(df_parts, ignore_index=True)
-                _train_data["date"] = pd.to_datetime(_train_data["date"])
+        try:
+            _train_data = load_merged_training_data()
+        except FileNotFoundError:
+            return None
     return _train_data
+
+
+def invalidate_train_data_cache():
+    """Clear cached training data after raw CSV upload."""
+    global _train_data
+    _train_data = None
 
 
 @router.get("/health", response_model=HealthResponse, tags=["Health"])
@@ -179,14 +188,87 @@ async def predict_single(request: PredictRequest):
 
 
 @router.post(
+    "/upload/raw",
+    response_model=RawUploadResponse,
+    responses={
+        200: {"description": "Raw files merged and predictions returned"},
+        400: {"model": ErrorResponse},
+    },
+    tags=["Upload"],
+)
+async def upload_raw_files(
+    main: UploadFile = File(..., description="new_house_transactions.csv"),
+    nearby: UploadFile = File(..., description="new_house_transactions_nearby_sectors.csv"),
+    pre: UploadFile = File(..., description="pre_owned_house_transactions.csv"),
+):
+    """
+    Upload 3 raw competition CSV files.
+
+    Flow: append/overwrite rows in ``data/train/*.csv`` → merge → feature engineering → predict.
+    Duplicate ``(month, sector)`` keys are overwritten by the latest upload.
+    """
+    try:
+        main_df = read_upload_bytes(await main.read(), main.filename)
+        nearby_df = read_upload_bytes(await nearby.read(), nearby.filename)
+        pre_df = read_upload_bytes(await pre.read(), pre.filename)
+
+        stats, result_df = process_raw_upload(main_df, nearby_df, pre_df)
+        invalidate_train_data_cache()
+
+        predictions = [
+            RawUploadPrediction(
+                date=pd.Timestamp(row["date"]).to_pydatetime(),
+                sector=int(row["sector"]),
+                predicted_log=float(row["predicted_log"]),
+                predicted_amount=int(row["predicted_amount"]),
+                actual_amount=(
+                    int(row["actual_amount"])
+                    if "actual_amount" in result_df.columns and pd.notna(row["actual_amount"])
+                    else None
+                ),
+            )
+            for _, row in result_df.iterrows()
+        ]
+
+        file_stats = {
+            key: RawFileStats(
+                filename=s["filename"],
+                total_rows=s["total_rows"],
+                added=s["added"],
+                updated=s["updated"],
+            )
+            for key, s in stats.items()
+        }
+
+        return RawUploadResponse(
+            status="success",
+            message=f"Merged 3 raw files and predicted {len(predictions)} rows",
+            train_dir=str(get_train_dir()),
+            file_stats=file_stats,
+            rows_predicted=len(predictions),
+            predictions=predictions,
+        )
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Raw upload error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
     "/upload",
     response_model=UploadResponse,
     responses={200: {"description": "File processed successfully"}},
+    tags=["Upload"],
 )
 async def upload_file(file: UploadFile = File(...)):
     """
-    Upload CSV/Excel file for batch prediction.
-    File must contain required feature columns.
+    Upload a single CSV/Excel with **pre-engineered feature columns** for batch prediction.
+
+    For raw competition data (3 files), use ``POST /upload/raw`` instead.
     """
     try:
         contents = await file.read()

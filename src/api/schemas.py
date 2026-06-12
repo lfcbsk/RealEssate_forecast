@@ -68,13 +68,43 @@ class PredictResponse(BaseModel):
 
 
 class UploadResponse(BaseModel):
-    """File upload response."""
+    """File upload response (pre-engineered features, single file)."""
 
     status: str
     filename: str
     rows_processed: int
     predictions: List[Dict[str, Any]]
     message: str
+
+
+class RawFileStats(BaseModel):
+    """Stats for one raw CSV after merge into data/train/."""
+
+    filename: str
+    total_rows: int
+    added: int
+    updated: int
+
+
+class RawUploadPrediction(BaseModel):
+    """Single prediction row from raw upload pipeline."""
+
+    date: datetime
+    sector: int
+    predicted_log: float
+    predicted_amount: int
+    actual_amount: Optional[int] = None
+
+
+class RawUploadResponse(BaseModel):
+    """Response after uploading 3 raw competition CSV files."""
+
+    status: str
+    message: str
+    train_dir: str
+    file_stats: Dict[str, RawFileStats]
+    rows_predicted: int
+    predictions: List[RawUploadPrediction]
 
 
 class SectorInfo(BaseModel):

@@ -43,7 +43,12 @@ RealEssate_forecast/
 │   │   ├── routes.py              # /health, /forecast, /predict, /drift, …
 │   │   └── schemas.py
 │   ├── app/
-│   │   └── streamlit_app.py       # Interactive dashboard
+│   │   ├── streamlit_app.py       # Home page
+│   │   ├── utils.py               # Upload/merge CSV, local predict helpers
+│   │   └── pages/
+│   │       ├── 1_📤_predict.py    # Upload 3 raw CSVs → merge → predict
+│   │       ├── 2_📈_forecast.py   # Multi-month sector forecast
+│   │       └── 3_📊_monitoring.py # Drift & metrics dashboard
 │   ├── models/
 │   │   ├── model_config.py        # Artifact paths (artifacts/)
 │   │   ├── model_registry.py      # ONNX Runtime inference
@@ -250,7 +255,8 @@ uv run uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
 | `/api/v1/sectors` | GET | Sector list and zero-sector info |
 | `/api/v1/metrics` | GET | MLflow run metrics |
 | `/api/v1/drift` | GET | Drift report |
-| `/api/v1/upload` | POST | Upload new CSV data |
+| `/api/v1/upload/raw` | POST | Upload 3 raw CSVs → merge into `data/train/` → predict |
+| `/api/v1/upload` | POST | Batch predict from pre-engineered features (single file) |
 | `/docs` | GET | Swagger UI |
 
 **Example forecast:**
@@ -267,7 +273,26 @@ curl -X POST http://localhost:8000/api/v1/forecast \
 uv run streamlit run src/app/streamlit_app.py
 ```
 
-Open [http://localhost:8501](http://localhost:8501) for forecasts, uploads, and drift views.
+Open [http://localhost:8501](http://localhost:8501)
+
+| Page | Purpose |
+|------|---------|
+| **Home** | Overview & quick start |
+| **📤 Upload & Predict** | Upload 3 raw CSVs → append/overwrite `data/train/` → merge → feature engineer → ONNX predict |
+| **📈 Sector Forecast** | Recursive multi-month forecast from merged CSV data |
+| **📊 Monitoring** | Drift, MLflow metrics, data file status |
+
+**Upload flow (no separate database):**
+
+```
+User uploads 3 raw CSV files
+        ↓
+Append + overwrite duplicates (month, sector) → data/train/*.csv
+        ↓
+load_and_merge → create_training_features → ModelRegistry.predict
+        ↓
+Download predictions CSV
+```
 
 ### 8. Run with Docker (optional)
 

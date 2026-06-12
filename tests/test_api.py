@@ -214,3 +214,44 @@ def test_api_cors_headers(client):
 
     # CORS headers phải có
     assert "access-control-allow-origin" in response.headers
+
+
+@patch("src.api.routes.process_raw_upload")
+@patch("src.api.routes.invalidate_train_data_cache")
+def test_upload_raw_success(mock_invalidate, mock_process, client):
+    """Test upload 3 raw CSV files."""
+    mock_process.return_value = (
+        {
+            "main": {"filename": "new_house_transactions.csv", "total_rows": 100, "added": 10, "updated": 2},
+            "nearby": {
+                "filename": "new_house_transactions_nearby_sectors.csv",
+                "total_rows": 100,
+                "added": 10,
+                "updated": 2,
+            },
+            "pre": {"filename": "pre_owned_house_transactions.csv", "total_rows": 100, "added": 10, "updated": 2},
+        },
+        pd.DataFrame(
+            {
+                "date": pd.date_range("2024-01-01", periods=2, freq="MS"),
+                "sector": [1, 2],
+                "predicted_log": [5.0, 5.1],
+                "predicted_amount": [100, 110],
+            }
+        ),
+    )
+
+    files = {
+        "main": ("new_house_transactions.csv", b"month,sector\n2024-01-01,1", "text/csv"),
+        "nearby": ("new_house_transactions_nearby_sectors.csv", b"month,sector\n2024-01-01,1", "text/csv"),
+        "pre": ("pre_owned_house_transactions.csv", b"month,sector\n2024-01-01,1", "text/csv"),
+    }
+    response = client.post("/api/v1/upload/raw", files=files)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
+    assert data["rows_predicted"] == 2
+    assert len(data["predictions"]) == 2
+    assert "main" in data["file_stats"]
+    mock_invalidate.assert_called_once()
