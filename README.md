@@ -3,7 +3,7 @@
 End-to-end **MLOps pipeline** for the Kaggle competition [**China Real Estate Demand Prediction**](https://www.kaggle.com/competitions/china-real-estate-demand-prediction). The system forecasts **monthly new-house transaction volumes** across **96 property sectors**, packages the model for production (**ONNX**), and exposes it through **FastAPI**, **Streamlit**,automate **drift monitoring** with **Mlfow**, **Grafana**, **CI/CD** and contain it by ** Docker**.
 
 
-Link of streamlit web: [Forecast]( https://realestateforecast-mdeeacuhemmtfwlog33stu.streamlit.app/ )
+Demo of streamlit web: [Forecast]( https://realestateforecast-mdeeacuhemmtfwlog33stu.streamlit.app/ )
 ---
 
 ## Table of contents
@@ -49,6 +49,16 @@ The Kaggle competition provides historical monthly panels:
 
 This repository turns the competition solution into a **production-ready MLOps stack**: reproducible training, artifact registry, serving, drift checks, and observability.
 
+### Solution for this subject 
+
+```mermaid
+flowchart TD
+    A[Input: month x sector] --> B{zero_rate >= 85%?}
+    B -->|Yes| C[Prediction = 0]
+    B -->|No| D[CatBoost model<br/>lag, rolling, sector, regime features]
+    C --> E[Final forecast]
+    D --> E
+```
 ---
 
 ## 2. Project purpose
@@ -85,16 +95,21 @@ Higher is better (max ≈ 1.0). This metric penalizes catastrophic errors more t
 
 All scores below use the same **temporal 80/20 holdout** (last 20% months as test) and **5-fold TimeSeriesSplit CV** on the train portion, unless noted.
 
-### 4.1 Cross-validation (train portion)
+### 4.1 Cross-validation (using Timesriessplit _ Walk Forward validation)
 
-| Model | CV Competition Score | CV MAE | CV R² |
-|-------|---------------------:|-------:|------:|
-| **CatBoost baseline** (default hyperparams) | 0.198 ± 0.24 | 16,759 | 0.420 |
-| **LightGBM baseline** | 0.000 ± 0.00 | 19,986 | 0.362 |
-| **CatBoost + Optuna** (50 trials) | **0.519 ± 0.062** | 15,602 | 0.394 |
-| LightGBM + Optuna (50 trials) | 0.457 ± 0.073 | 16,463 | 0.371 |
+| Model | CV Competition Score | CV MAE | CV R² | CV RMSE | CV MAPE|
+|-------|---------------------:|-------:|------:|------:|--------:|
+| **Seasonal Naive baseline** | 0.216 ± 0.176 | 24,999 | -0.128 | 52,024 | 193.64 |
+| **Rule-based baseline** | 0.1455 ± 0.176 | 24,961 | -0.0992 | 51,546| 206.41 |
+| **CatBoost baseline** (default hyperparams) | 0.198 ± 0.24 | 16,759 | 0.420 | 39,437 | 99.18 |
+| **LightGBM baseline** | 0.000 ± 0.00 | 19,986 | 0.362 | 41,094 | 194.66 |
+| **XGBoost baseline** | 0.000 ± 0.00 | 20,272 | 0.319 | 42,882 | 180.87 |
+| **Random Forest baseline** | 0.000 ± 0.00 | 19,679 | 0.363 | 41,436 | 184.09 |
+| **HistGB baseline** | 0.000 ± 0.00 | 19,680 | 0.383 | 41,436 | 184.09 |
+| **CatBoost + Optuna** (50 trials) | **0.519 ± 0.062** | 15,602 | 0.394 | 39,421 | 0.394 |
+| **LightGBM + Optuna** (50 trials) | 0.457 ± 0.073 | 16,463 | 0.371 | 49.342 | 76.85 |
 
-Optuna tuning improves CatBoost CV score by **~2.6×** over the default baseline.
+Based on the cross-validation results, CatBoost + Optuna is selected as the final model. Although some baseline models achieve slightly higher R² values, CatBoost + Optuna provides the highest CV Competition Score (0.519 ± 0.062) and the lowest CV MAE (15,602) among all evaluated models. It also demonstrates better stability across walk-forward validation folds compared with other gradient boosting models. Since the competition metric is the primary evaluation criterion, the improved predictive accuracy and robustness of CatBoost + Optuna make it the most suitable final model for deployment.
 
 ### 4.2 Holdout test set (local 20% split)
 
@@ -102,10 +117,11 @@ Comparison on the **same temporal test set** after full pipeline training:
 
 | Metric | CatBoost baseline | CatBoost tuned (production) |
 |--------|------------------:|--------------------------:|
-| **Competition Score** | 0.198 | **0.551** |
-| MAE | 16,759 | **15,653** |
-| RMSE | 39,437 | 39,507 |
-| R² | 0.420 | 0.395 |
+| **Competition Score** | 0.198 | **0.512** |
+| MAE | 16,759 | **15,601** |
+| RMSE | 39,437 | 39,421 |
+| R² | 0.420 | 0.394 |
+| MAPE | 99.18 | 67.10 |
 | Bad rate (APE > 100%) | high | reduced |
 
 Tuned model **holdout evaluation** (final pipeline run, notebook + `training.py`):
@@ -129,7 +145,7 @@ Scores submitted to the competition platform:
 | **Public test** | **0.55** |
 | **Private / hidden test** | **0.42** |
 
-The gap between public (0.55) and hidden (0.42) reflects **distribution shift** on the unreleased test period — motivating the drift-monitoring and retrain orchestration built into this project.
+The performance gap between public (0.55) and hidden (0.42) test sets is consistent with distribution changes observed during drift analysis. The monitoring pipeline detected high **feature drift** (87.2% of features affected), particularly in temporal variables such as year, trend, regime, and time-series dynamics (lags and volatility features). This indicates that the hidden evaluation period likely represents a different market regime compared with the training/public period. Therefore, continuous drift monitoring and automated retraining mechanisms are necessary to maintain model performance over time.
 
 ### 4.4 Feature importance & model insights
 
@@ -214,31 +230,33 @@ The training window covers COVID shock (2020), a short bull run (2021), and prol
 
 ## 5. System architecture
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        DATA LAYER                               │
-│  data/train/*.csv  ──► ingest_preprocess  ──► feature engineering │
-└───────────────────────────────┬─────────────────────────────────┘
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      TRAINING LAYER                             │
-│  Optuna tuning → TimeSeriesSplit CV → holdout eval              │
-│  → production retrain → artifacts/ (ONNX, pickles, reference)   │
-│  → MLflow tracking (mlruns/)                                    │
-└───────────────────────────────┬─────────────────────────────────┘
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      SERVING LAYER                              │
-│  FastAPI (ONNX inference)  │  Streamlit dashboard               │
-│  POST /upload/raw (3 CSVs) │  Upload → merge → predict          │
-└───────────────────────────────┬─────────────────────────────────┘
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      MLOPS LAYER                                │
-│  Drift detection → orchestrator → registry gate → promote       │
-│  Prometheus + Grafana (CPU/RAM/GPU, latency p95/p99, errors)    │
-│  GitHub Actions (CI, orchestration schedule)                    │
-└─────────────────────────────────────────────────────────────────┘
+``` mermaid
+flowchart TD
+    subgraph DATA["DATA LAYER"]
+        A1[data/train/*.csv] --> A2[ingest_preprocess] --> A3[feature engineering]
+    end
+
+    subgraph TRAIN["TRAINING LAYER"]
+        B1[Optuna tuning] --> B2[TimeSeriesSplit CV] --> B3[Holdout eval] --> B4[Production retrain]
+        B4 --> B5[artifacts/ ONNX, pickles, reference]
+        B4 --> B6[MLflow tracking - mlruns/]
+    end
+
+    subgraph SERVE["SERVING LAYER"]
+        C1[FastAPI - ONNX inference]
+        C2[Streamlit dashboard]
+        C3[POST /upload/raw - 3 CSVs]
+        C4[Upload -> merge -> predict]
+    end
+
+    subgraph MLOPS["MLOPS LAYER"]
+        D1[Drift detection] --> D2[Orchestrator] --> D3[Registry gate] --> D4[Promote]
+        D5[Prometheus + Grafana - CPU/RAM/GPU, latency p95/p99, errors]
+        D6[GitHub Actions - CI, orchestration schedule]
+    end
+
+    DATA --> TRAIN --> SERVE --> MLOPS
+
 ```
 
 **Drift → retrain flow:**
@@ -249,6 +267,7 @@ New data → detect_data_drift() vs artifacts/reference.parquet
          → else retrain → holdout eval → registry gate (score ≥ 0.50)
          → promote ONNX + refresh reference.parquet
 ```
+Drift signals trigger investigation and retraining workflow, but retraining decisions are also validated against model performance degradation metrics.
 
 ---
 
