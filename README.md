@@ -2,6 +2,8 @@
 
 End-to-end **MLOps pipeline** for the Kaggle competition [**China Real Estate Demand Prediction**](https://www.kaggle.com/competitions/china-real-estate-demand-prediction). The system forecasts **monthly new-house transaction volumes** across **96 property sectors**, packages the model for production (**ONNX**), and exposes it through **FastAPI**, **Streamlit**,automate **drift monitoring** with **Mlfow**, **Grafana**, **CI/CD** and contain it by ** Docker**.
 
+
+Link of streamlit web: [Forecast]( https://realestateforecast-mdeeacuhemmtfwlog33stu.streamlit.app/ )
 ---
 
 ## Table of contents
